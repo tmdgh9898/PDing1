@@ -17,7 +17,8 @@ MP4_QUALITIES = [
     "play_360p.mp4",
     "play_240p.mp4"
 ]
-DOWNLOAD_DIR = "./downloads"
+import os
+DOWNLOAD_DIR = os.path.expanduser("~/storage/downloads")
 INVALID_FILENAME_CHARS = r'[<>:"/\\|?*]'
 
 
