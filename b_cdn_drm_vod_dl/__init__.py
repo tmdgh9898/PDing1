@@ -14,6 +14,7 @@ class BunnyVideoDRM:
 
         cmd = [
             "yt-dlp",
+            "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",  # 최고 화질 선택
             "-o", output_path,
             "--referer", self.referer,
             "--hls-use-mpegts",
@@ -28,4 +29,3 @@ class BunnyVideoDRM:
             print(f"[SUCCESS] Download completed: {output_path}")
         except subprocess.CalledProcessError as e:
             print(f"[ERROR] yt-dlp failed: {e}")
-
