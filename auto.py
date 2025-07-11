@@ -1,68 +1,136 @@
-import os import re import requests import io from contextlib import redirect_stdout, redirect_stderr from b_cdn_drm_vod_dl import BunnyVideoDRM from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
+import re
+import requests
+import io
+from contextlib import redirect_stdout, redirect_stderr
+from b_cdn_drm_vod_dl import BunnyVideoDRM
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-#CDN prefixes
+# CDN prefixes
+PRIMARY_PREFIX = "vz-f9765c3e-82b"
+SECONDARY_PREFIX = "vz-bcc18906-38f"
+TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
+# mp4 화질 옵션 목록
+MP4_QUALITIES = [
+    "play_720p.mp4",
+    "play_480p.mp4",
+    "play_360p.mp4",
+    "play_240p.mp4"
+]
+DOWNLOAD_DIR = "./downloads"
+INVALID_FILENAME_CHARS = r'[<>:"/\\|?*]'
 
-PRIMARY_PREFIX = "vz-f9765c3e-82b" SECONDARY_PREFIX = "vz-bcc18906-38f" TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
 
-mp4 quality options
+def sanitize_filename(name: str) -> str:
+    return re.sub(INVALID_FILENAME_CHARS, '_', name)
 
-MP4_QUALITIES = [ "play_720p.mp4", "play_480p.mp4", "play_360p.mp4", "play_240p.mp4" ]
 
-Save directly to Android Download folder
+def fetch_title(url: str) -> str:
+    headers = {"User-Agent": "Mozilla/5.0"}
+    resp = requests.get(url, headers=headers, timeout=10)
+    resp.raise_for_status()
+    match = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    raise ValueError("페이지 제목을 찾을 수 없습니다.")
 
-DOWNLOAD_DIR = os.path.expanduser("~/storage/downloads") INVALID_FILENAME_CHARS = r'[<>:"/\|?*]'
 
-def sanitize_filename(name: str) -> str: """ Remove characters invalid in filenames. """ return re.sub(INVALID_FILENAME_CHARS, '_', name)
+def build_video_info(entry: dict) -> dict:
+    referer = entry["referer"]
+    orig_name = entry["name"]
+    match = re.search(r"v=([a-f0-9\-]+)", referer)
+    if not match:
+        raise ValueError(f"video_id not found in referer: {referer}")
+    safe_name = sanitize_filename(orig_name)
+    return {"orig_name": orig_name, "safe_name": safe_name, "referer": referer, "video_id": match.group(1)}
 
-def fetch_title(url: str) -> str: """ Fetch <title> from given URL and sanitize. """ headers = {"User-Agent": "Mozilla/5.0"} resp = requests.get(url, headers=headers, timeout=10) resp.raise_for_status() match = re.search(r"<title[^>]>(.?)</title>", resp.text, re.IGNORECASE | re.DOTALL) if not match: raise ValueError("Page title not found") title = match.group(1).strip() # Remove prefix before '|' or first underscore if '|' in title: title = title.split('|', 1)[1].strip() elif '' in title: parts = re.split(r'\s*', title, 1) title = parts[1].strip() if len(parts) > 1 else title return title
 
-def build_video_info(url: str) -> dict: """ Extract video_id and sanitize filename. """ match = re.search(r"v=([a-f0-9-]+)", url) if not match: raise ValueError(f"video_id not found in URL: {url}") video_id = match.group(1) name = sanitize_filename(fetch_title(url)) return { "referer": url, "video_id": video_id, "safe_name": name }
+def download_video(video_info: dict) -> dict:
+    vid = video_info['video_id']
+    safe_name = video_info['safe_name']
+    orig_name = video_info['orig_name']
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    output_path = os.path.join(DOWNLOAD_DIR, f"{safe_name}.mp4")
 
-def download_video(info: dict) -> dict: """ Try m3u8 and mp4 (best quality) across prefixes. """ vid = info['video_id'] name = info['safe_name'] os.makedirs(DOWNLOAD_DIR, exist_ok=True) out_path = os.path.join(DOWNLOAD_DIR, f"{name}.mp4") headers = {"User-Agent": "Mozilla/5.0", "Referer": info['referer']} prefixes = [PRIMARY_PREFIX, SECONDARY_PREFIX, TERTIARY_PREFIX]
+    # 시도 순서 구성: primary -> secondary -> tertiary prefixes
+    attempts = []
+    # primary
+    attempts.append(("m3u8 primary", f"https://{PRIMARY_PREFIX}.b-cdn.net/{vid}/playlist.m3u8"))
+    for q in MP4_QUALITIES:
+        attempts.append((f"mp4 primary {q}", f"https://{PRIMARY_PREFIX}.b-cdn.net/{vid}/{q}"))
+    # secondary
+    attempts.append(("m3u8 secondary", f"https://{SECONDARY_PREFIX}.b-cdn.net/{vid}/playlist.m3u8"))
+    for q in MP4_QUALITIES:
+        attempts.append((f"mp4 secondary {q}", f"https://{SECONDARY_PREFIX}.b-cdn.net/{vid}/{q}"))
+    # tertiary
+    attempts.append(("m3u8 tertiary", f"https://{TERTIARY_PREFIX}.b-cdn.net/{vid}/playlist.m3u8"))
+    for q in MP4_QUALITIES:
+        attempts.append((f"mp4 tertiary {q}", f"https://{TERTIARY_PREFIX}.b-cdn.net/{vid}/{q}"))
 
-# Attempt order: m3u8 then mp4 qualities for each prefix
-for prefix in prefixes:
-    # m3u8 attempt
-    m3u8_url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
-    try:
-        buf = io.StringIO()
-        with redirect_stdout(buf), redirect_stderr(buf):
-            job = BunnyVideoDRM(
-                referer=info['referer'],
-                m3u8_url=m3u8_url,
-                name=name,
-                path=DOWNLOAD_DIR
-            )
-            job.download()
-        if os.path.exists(out_path):
-            return {"name": info['referer'], "success": True}
-    except Exception:
-        pass
-    # mp4 fallback
-    for quality in MP4_QUALITIES:
-        mp4_url = f"https://{prefix}.b-cdn.net/{vid}/{quality}"
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": video_info["referer"]}
+    for method, url in attempts:
         try:
-            resp = requests.get(mp4_url, headers=headers, stream=True, timeout=10)
-            resp.raise_for_status()
-            with open(out_path, 'wb') as f:
-                for chunk in resp.iter_content(1024*1024):
-                    f.write(chunk)
-            return {"name": info['referer'], "success": True}
+            if method.startswith("m3u8"):
+                buf = io.StringIO()
+                with redirect_stdout(buf), redirect_stderr(buf):
+                    job = BunnyVideoDRM(
+                        referer=video_info["referer"],
+                        m3u8_url=url,
+                        name=safe_name,
+                        path=DOWNLOAD_DIR
+                    )
+                    job.download()
+            else:
+                resp = requests.get(url, headers=headers, stream=True, timeout=10)
+                resp.raise_for_status()
+                with open(output_path, 'wb') as f:
+                    for chunk in resp.iter_content(1024*1024):
+                        f.write(chunk)
+            if os.path.exists(output_path):
+                return {"name": orig_name, "success": True}
         except Exception:
             continue
-return {"name": info['referer'], "success": False}
+    return {"name": orig_name, "success": False}
 
-def main(): raw = input("Enter URLs (space/comma-separated):\n").strip() urls = [u for u in re.split(r"[\s,;]+", raw) if u] if not urls: print("No URLs provided.") return jobs = [build_video_info(u) for u in urls] results = [] with ThreadPoolExecutor(max_workers=3) as executor: futures = [executor.submit(download_video, job) for job in jobs] for f in as_completed(futures): results.append(f.result())
 
-print("\n=== Results ===")
-for r in results:
-    if r['success']:
-        print(f"[OK] {r['name']}")
-errs = [r['name'] for r in results if not r['success']]
-if errs:
-    print("\n=== Failed ===")
-    for e in errs:
-        print(f"- {e}")
+def main():
+    raw = input("URL들을 공백/쉼표로 구분하여 입력하세요:\n")
+    urls = [u for u in re.split(r"[\s,;]+", raw.strip()) if u]
+    if not urls:
+        print("URL이 없습니다.")
+        return
 
-if name == "main": main()
+    videos = []
+    for u in urls:
+        try:
+            title = fetch_title(u)
+            if '|' in title:
+                title = title.split('|', 1)[1].strip()
+            videos.append({"referer": u, "name": title})
+        except Exception:
+            name = input(f"{u} 제목 자동 추출 실패, 제목 입력: ")
+            videos.append({"referer": u, "name": name})
 
+    confirm = input("즉시 다운로드 시작? (y/n): ").strip().lower()
+    if confirm not in ("y","yes","예"):
+        print("취소됨.")
+        return
+
+    results = []
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(download_video, build_video_info(v)) for v in videos]
+        for f in as_completed(futures):
+            results.append(f.result())
+
+    print("\n=== 다운로드 결과 ===")
+    for r in results:
+        if r['success']:
+            print(f"[OK] {r['name']}")
+    errors = [r['name'] for r in results if not r['success']]
+    if errors:
+        print("\n=== 에러 발생 항목 ===")
+        for e in errors:
+            print(f"- {e}")
+
+if __name__ == "__main__":
+    main()
