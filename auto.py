@@ -2,6 +2,7 @@ import os
 import re
 import requests
 import io
+import shutil
 from contextlib import redirect_stdout, redirect_stderr
 from b_cdn_drm_vod_dl import BunnyVideoDRM
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,8 +20,9 @@ MP4_QUALITIES = [
     "play_240p.mp4"
 ]
 
-# Save directly to Android Download folder
-DOWNLOAD_DIR = os.path.expanduser("~/storage/downloads")
+# Local temp download directory and Android Download directory
+TEMP_DIR = os.path.join(os.getcwd(), "downloads")
+ANDROID_DOWNLOAD_DIR = "/storage/emulated/0/Download"
 INVALID_FILENAME_CHARS = r'[<>:"/\\|?*]'
 
 
@@ -60,21 +62,26 @@ def build_video_info(url: str) -> dict:
         raise ValueError(f"video_id not found in URL: {url}")
     video_id = match.group(1)
     name = sanitize_filename(fetch_title(url))
-    return {
-        "referer": url,
-        "video_id": video_id,
-        "safe_name": name
-    }
+    return {"referer": url, "video_id": video_id, "safe_name": name}
+
+
+def move_to_android(src: str, name: str) -> None:
+    """
+    Move downloaded file from temp to Android Download folder.
+    """
+    os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
+    dest = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}.mp4")
+    shutil.move(src, dest)
 
 
 def download_video(info: dict) -> dict:
     """
-    Try m3u8 and mp4 (best quality) across prefixes.
+    Try m3u8 and mp4 (best quality) across prefixes, then move file to Android folder.
     """
     vid = info['video_id']
     name = info['safe_name']
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    out_path = os.path.join(DOWNLOAD_DIR, f"{name}.mp4")
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    temp_path = os.path.join(TEMP_DIR, f"{name}.mp4")
     headers = {"User-Agent": "Mozilla/5.0", "Referer": info['referer']}
     prefixes = [PRIMARY_PREFIX, SECONDARY_PREFIX, TERTIARY_PREFIX]
 
@@ -89,10 +96,11 @@ def download_video(info: dict) -> dict:
                     referer=info['referer'],
                     m3u8_url=m3u8_url,
                     name=name,
-                    path=DOWNLOAD_DIR
+                    path=TEMP_DIR
                 )
                 job.download()
-            if os.path.exists(out_path):
+            if os.path.exists(temp_path):
+                move_to_android(temp_path, name)
                 return {"name": info['referer'], "success": True}
         except Exception:
             pass
@@ -102,9 +110,10 @@ def download_video(info: dict) -> dict:
             try:
                 resp = requests.get(mp4_url, headers=headers, stream=True, timeout=10)
                 resp.raise_for_status()
-                with open(out_path, 'wb') as f:
+                with open(temp_path, 'wb') as f:
                     for chunk in resp.iter_content(1024*1024):
                         f.write(chunk)
+                move_to_android(temp_path, name)
                 return {"name": info['referer'], "success": True}
             except Exception:
                 continue
