@@ -8,7 +8,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from b_cdn_drm_vod_dl import BunnyVideoDRM
 
-# CDN prefixes\ 
+# CDN prefixes
 PRIMARY_PREFIX = "vz-f9765c3e-82b"
 SECONDARY_PREFIX = "vz-bcc18906-38f"
 TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
@@ -16,7 +16,7 @@ QUATERNARY_PREFIX = "vz-40d00b68-e91"
 
 # Fallback MP4 qualities
 MP4_QUALITIES = ["play_720p.mp4", "play_480p.mp4", "play_360p.mp4", "play_240p.mp4"]
-# Advanced prefixes video/audio lists
+# Advanced video/audio lists
 VIDEO_RESOLUTIONS = ["2160p", "1440p", "1080p", "720p", "480p", "360p"]
 AUDIO_QUALITIES = ["256a", "192a", "128a", "96a"]
 
@@ -31,8 +31,7 @@ def sanitize_filename(name: str) -> str:
 
 
 def fetch_title(url: str) -> str:
-    headers = {"User-Agent": "Mozilla/5.0"}
-    resp = requests.get(url, headers=headers, timeout=10)
+    resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
     resp.raise_for_status()
     m = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
     if not m:
@@ -64,20 +63,17 @@ def move_to_android(src: str, name: str) -> None:
 def download_advanced(info: dict, prefix: str) -> bool:
     vid, name, referer = info['video_id'], info['name'], info['referer']
     os.makedirs(TEMP_DIR, exist_ok=True)
-    temp_video = os.path.join(TEMP_DIR, f"{name}_video.mp4")
-    temp_merged = os.path.join(TEMP_DIR, f"{name}.mp4")
-    # download highest resolution video + highest quality audio
     for res in VIDEO_RESOLUTIONS:
         video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/video/{res}/video.m3u8"
         try:
             buf = io.StringIO()
             with redirect_stdout(buf), redirect_stderr(buf):
                 BunnyVideoDRM(referer=referer, m3u8_url=video_m3u8, name=f"{name}_video", path=TEMP_DIR).download()
-            if not os.path.exists(temp_video):
+            video_path = os.path.join(TEMP_DIR, f"{name}_video.mp4")
+            if not os.path.exists(video_path):
                 continue
         except:
             continue
-        # audio merge
         for aq in AUDIO_QUALITIES:
             audio_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
             try:
@@ -87,8 +83,9 @@ def download_advanced(info: dict, prefix: str) -> bool:
                 audio_path = os.path.join(TEMP_DIR, f"{name}_audio.mp4")
                 if not os.path.exists(audio_path):
                     continue
-                subprocess.run(["ffmpeg", "-i", temp_video, "-i", audio_path, "-c", "copy", "-y", temp_merged], check=True)
-                move_to_android(temp_merged, name)
+                merged = os.path.join(TEMP_DIR, f"{name}.mp4")
+                subprocess.run(["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged], check=True)
+                move_to_android(merged, name)
                 return True
             except:
                 continue
@@ -97,41 +94,40 @@ def download_advanced(info: dict, prefix: str) -> bool:
 
 def download_video(info: dict) -> dict:
     vid, name, referer = info['video_id'], info['name'], info['referer']
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": referer}
-    prefixes = [PRIMARY_PREFIX, SECONDARY_PREFIX, TERTIARY_PREFIX]
+    headers = {"User-Agent":"Mozilla/5.0","Referer":referer}
     os.makedirs(TEMP_DIR, exist_ok=True)
-    # primary, secondary, tertiary basic logic
-    for p in prefixes:
-        # advanced for tertiary
-        if p == TERTIARY_PREFIX:
-            if download_advanced(info, p):
-                return {"name": referer, "success": True}
-            continue
-        # basic m3u8
-        url = f"https://{p}.b-cdn.net/{vid}/playlist.m3u8"
+    # 1) primary/secondary basic
+    for prefix in [PRIMARY_PREFIX, SECONDARY_PREFIX]:
+        # m3u8
+        url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
         try:
             buf = io.StringIO()
             with redirect_stdout(buf), redirect_stderr(buf):
                 BunnyVideoDRM(referer=referer, m3u8_url=url, name=name, path=TEMP_DIR).download()
-            temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
-            if os.path.exists(temp_file):
-                move_to_android(temp_file, name)
+            file = os.path.join(TEMP_DIR, f"{name}.mp4")
+            if os.path.exists(file):
+                move_to_android(file, name)
                 return {"name": referer, "success": True}
         except:
             pass
         # mp4 fallback
         for q in MP4_QUALITIES:
-            mp4_url = f"https://{p}.b-cdn.net/{vid}/{q}"
             try:
-                resp = requests.get(mp4_url, headers=headers, stream=True, timeout=10)
+                resp = requests.get(f"https://{prefix}.b-cdn.net/{vid}/{q}", headers=headers, stream=True, timeout=10)
                 resp.raise_for_status()
-                temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
-                with open(temp_file, 'wb') as f:
+                file = os.path.join(TEMP_DIR, f"{name}.mp4")
+                with open(file,'wb') as f:
                     for chunk in resp.iter_content(1024*1024): f.write(chunk)
-                move_to_android(temp_file, name)
+                move_to_android(file,name)
                 return {"name": referer, "success": True}
             except:
                 continue
+    # 2) tertiary advanced
+    if download_advanced(info, TERTIARY_PREFIX):
+        return {"name": referer, "success": True}
+    # 3) quaternary advanced fallback
+    if download_advanced(info, QUATERNARY_PREFIX):
+        return {"name": referer, "success": True}
     return {"name": referer, "success": False}
 
 
@@ -141,13 +137,11 @@ def main():
     if not urls:
         print("No URLs provided.")
         return
-    jobs = [build_video_info(u) for u in urls]
     results = []
     with ThreadPoolExecutor(max_workers=3) as ex:
-        futures = [ex.submit(download_video, job) for job in jobs]
+        futures = [ex.submit(download_video, build_video_info(u)) for u in urls]
         for f in as_completed(futures):
             results.append(f.result())
-
     print("\n=== Results ===")
     for r in results:
         if r['success']:
@@ -155,8 +149,7 @@ def main():
     fails = [r['name'] for r in results if not r['success']]
     if fails:
         print("\n=== Failed ===")
-        for e in fails:
-            print(f"- {e}")
+        for e in fails: print(f"- {e}")
 
 if __name__ == "__main__":
     main()
