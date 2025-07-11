@@ -20,24 +20,20 @@ MP4_QUALITIES = [
     "play_360p.mp4",
     "play_240p.mp4"
 ]
+# Quaternary resolution options for M3U8
+QUATERNARY_RESOLUTIONS = ["2160p", "1440p", "1080p", "720p", "480p", "360p"]
 
-# Local temp download directory and Android Download directory
+# Temporary and Android Download directories
 TEMP_DIR = os.path.join(os.getcwd(), "downloads")
 ANDROID_DOWNLOAD_DIR = "/storage/emulated/0/Download"
 INVALID_FILENAME_CHARS = r'[<>:"/\\|?*]'
 
 
 def sanitize_filename(name: str) -> str:
-    """
-    Remove characters invalid in filenames.
-    """
     return re.sub(INVALID_FILENAME_CHARS, '_', name)
 
 
 def fetch_title(url: str) -> str:
-    """
-    Fetch <title> from given URL and sanitize.
-    """
     headers = {"User-Agent": "Mozilla/5.0"}
     resp = requests.get(url, headers=headers, timeout=10)
     resp.raise_for_status()
@@ -45,7 +41,6 @@ def fetch_title(url: str) -> str:
     if not match:
         raise ValueError("Page title not found")
     title = match.group(1).strip()
-    # Remove prefix before '|' or first underscore
     if '|' in title:
         title = title.split('|', 1)[1].strip()
     elif '_' in title:
@@ -55,69 +50,75 @@ def fetch_title(url: str) -> str:
 
 
 def build_video_info(url: str) -> dict:
-    """
-    Extract video_id and sanitize filename.
-    """
     match = re.search(r"v=([a-f0-9\-]+)", url)
     if not match:
         raise ValueError(f"video_id not found in URL: {url}")
-    video_id = match.group(1)
+    vid = match.group(1)
     name = sanitize_filename(fetch_title(url))
-    return {"referer": url, "video_id": video_id, "safe_name": name}
+    return {"referer": url, "video_id": vid, "safe_name": name}
 
 
-def move_to_android(src: str, name: str) -> None:
-    """
-    Move downloaded file from temp to Android Download folder.
-    """
+def move_to_android(temp_path: str, name: str) -> None:
     os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
     dest = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}.mp4")
-    shutil.move(src, dest)
+    shutil.move(temp_path, dest)
 
 
 def download_video(info: dict) -> dict:
-    """
-    Try m3u8 and mp4 (best quality) across prefixes, then move file to Android folder.
-    """
     vid = info['video_id']
     name = info['safe_name']
     os.makedirs(TEMP_DIR, exist_ok=True)
     temp_path = os.path.join(TEMP_DIR, f"{name}.mp4")
     headers = {"User-Agent": "Mozilla/5.0", "Referer": info['referer']}
-    prefixes = [PRIMARY_PREFIX, SECONDARY_PREFIX, TERTIARY_PREFIX]
+    prefixes = [PRIMARY_PREFIX, SECONDARY_PREFIX, TERTIARY_PREFIX, QUATERNARY_PREFIX]
 
-    # Attempt order: m3u8 then mp4 qualities for each prefix
     for prefix in prefixes:
-        # m3u8 attempt
-        m3u8_url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
-        try:
-            buf = io.StringIO()
-            with redirect_stdout(buf), redirect_stderr(buf):
-                job = BunnyVideoDRM(
-                    referer=info['referer'],
-                    m3u8_url=m3u8_url,
-                    name=name,
-                    path=TEMP_DIR
-                )
-                job.download()
-            if os.path.exists(temp_path):
-                move_to_android(temp_path, name)
-                return {"name": info['referer'], "success": True}
-        except Exception:
-            pass
-        # mp4 fallback
-        for quality in MP4_QUALITIES:
-            mp4_url = f"https://{prefix}.b-cdn.net/{vid}/{quality}"
+        # Primary, secondary, tertiary: standard m3u8 and mp4 fallback
+        if prefix != QUATERNARY_PREFIX:
+            # m3u8
+            m3u8_url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
             try:
-                resp = requests.get(mp4_url, headers=headers, stream=True, timeout=10)
-                resp.raise_for_status()
-                with open(temp_path, 'wb') as f:
-                    for chunk in resp.iter_content(1024*1024):
-                        f.write(chunk)
-                move_to_android(temp_path, name)
-                return {"name": info['referer'], "success": True}
+                buf = io.StringIO()
+                with redirect_stdout(buf), redirect_stderr(buf):
+                    job = BunnyVideoDRM(
+                        referer=info['referer'], m3u8_url=m3u8_url,
+                        name=name, path=TEMP_DIR
+                    )
+                    job.download()
+                if os.path.exists(temp_path):
+                    move_to_android(temp_path, name)
+                    return {"name": info['referer'], "success": True}
             except Exception:
-                continue
+                pass
+            # MP4 fallback
+            for quality in MP4_QUALITIES:
+                mp4_url = f"https://{prefix}.b-cdn.net/{vid}/{quality}"
+                try:
+                    resp = requests.get(mp4_url, headers=headers, stream=True, timeout=10)
+                    resp.raise_for_status()
+                    with open(temp_path, 'wb') as f:
+                        for chunk in resp.iter_content(chunk_size=1024*1024): f.write(chunk)
+                    move_to_android(temp_path, name)
+                    return {"name": info['referer'], "success": True}
+                except Exception:
+                    continue
+        else:
+            # Quaternary: resolution-specific m3u8
+            for res in QUATERNARY_RESOLUTIONS:
+                m3u8_url = f"https://{prefix}.b-cdn.net/{vid}/video/{res}/video.m3u8"
+                try:
+                    buf = io.StringIO()
+                    with redirect_stdout(buf), redirect_stderr(buf):
+                        job = BunnyVideoDRM(
+                            referer=info['referer'], m3u8_url=m3u8_url,
+                            name=name, path=TEMP_DIR
+                        )
+                        job.download()
+                    if os.path.exists(temp_path):
+                        move_to_android(temp_path, name)
+                        return {"name": info['referer'], "success": True}
+                except Exception:
+                    continue
     return {"name": info['referer'], "success": False}
 
 
@@ -138,10 +139,10 @@ def main():
     for r in results:
         if r['success']:
             print(f"[OK] {r['name']}")
-    errs = [r['name'] for r in results if not r['success']]
-    if errs:
+    failures = [r['name'] for r in results if not r['success']]
+    if failures:
         print("\n=== Failed ===")
-        for e in errs:
+        for e in failures:
             print(f"- {e}")
 
 if __name__ == "__main__":
