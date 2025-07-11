@@ -6,27 +6,26 @@ PRIMARY_PREFIX = "vz-f9765c3e-82b" SECONDARY_PREFIX = "vz-bcc18906-38f" TERTIARY
 
 mp4 화질 옵션 목록
 
-MP4_QUALITIES = [ "play_720p.mp4", "play_480p.mp4", "play_360p.mp4", "play_240p.mp4" ] DOWNLOAD_DIR = "./downloads" INVALID_FILENAME_CHARS = r'[<>:"/\|?*]'
+MP4_QUALITIES = [ "play_720p.mp4", "play_480p.mp4", "play_360p.mp4", "play_240p.mp4" ]
+
+DOWNLOAD_DIR = "./downloads" INVALID_FILENAME_CHARS = r'[<>:"/\|?*]'
 
 def sanitize_filename(name: str) -> str: return re.sub(INVALID_FILENAME_CHARS, '_', name)
 
 def fetch_title(url: str) -> str: headers = {"User-Agent": "Mozilla/5.0"} resp = requests.get(url, headers=headers, timeout=10) resp.raise_for_status() match = re.search(r"<title[^>]>(.?)</title>", resp.text, re.IGNORECASE | re.DOTALL) if match: return match.group(1).strip() raise ValueError("페이지 제목을 찾을 수 없습니다.")
 
-def build_video_info(entry: dict) -> dict: referer = entry["referer"] orig_name = entry["name"] match = re.search(r"v=([a-f0-9-]+)", referer) if not match: raise ValueError(f"video_id not found in referer: {referer}") safe_name = sanitize_filename(orig_name) return {"orig_name": orig_name, "safe_name": safe_name, "referer": referer, "video_id": match.group(1)}
+def build_video_info(entry: dict) -> dict: referer = entry["referer"] orig_name = entry["name"] match = re.search(r"v=([a-f0-9-]+)", referer) if not match: raise ValueError(f"video_id not found in referer: {referer}") safe_name = sanitize_filename(orig_name) return { "orig_name": orig_name, "safe_name": safe_name, "referer": referer, "video_id": match.group(1) }
 
 def download_video(video_info: dict) -> dict: vid = video_info['video_id'] safe_name = video_info['safe_name'] orig_name = video_info['orig_name'] os.makedirs(DOWNLOAD_DIR, exist_ok=True) output_path = os.path.join(DOWNLOAD_DIR, f"{safe_name}.mp4")
 
-# 시도 순서 구성: primary -> secondary -> tertiary prefixes
+# 시도 순서: primary → secondary → tertiary
 attempts = []
-# primary
 attempts.append(("m3u8 primary", f"https://{PRIMARY_PREFIX}.b-cdn.net/{vid}/playlist.m3u8"))
 for q in MP4_QUALITIES:
     attempts.append((f"mp4 primary {q}", f"https://{PRIMARY_PREFIX}.b-cdn.net/{vid}/{q}"))
-# secondary
 attempts.append(("m3u8 secondary", f"https://{SECONDARY_PREFIX}.b-cdn.net/{vid}/playlist.m3u8"))
 for q in MP4_QUALITIES:
     attempts.append((f"mp4 secondary {q}", f"https://{SECONDARY_PREFIX}.b-cdn.net/{vid}/{q}"))
-# tertiary
 attempts.append(("m3u8 tertiary", f"https://{TERTIARY_PREFIX}.b-cdn.net/{vid}/playlist.m3u8"))
 for q in MP4_QUALITIES:
     attempts.append((f"mp4 tertiary {q}", f"https://{TERTIARY_PREFIX}.b-cdn.net/{vid}/{q}"))
@@ -48,7 +47,7 @@ for method, url in attempts:
             resp = requests.get(url, headers=headers, stream=True, timeout=10)
             resp.raise_for_status()
             with open(output_path, 'wb') as f:
-                for chunk in resp.iter_content(1024*1024):
+                for chunk in resp.iter_content(chunk_size=1024*1024):
                     f.write(chunk)
         if os.path.exists(output_path):
             return {"name": orig_name, "success": True}
@@ -70,7 +69,7 @@ for u in urls:
         videos.append({"referer": u, "name": name})
 
 confirm = input("즉시 다운로드 시작? (y/n): ").strip().lower()
-if confirm not in ("y","yes","예"):
+if confirm not in ("y", "yes", "예"):
     print("취소됨.")
     return
 
