@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 PRIMARY_PREFIX = "vz-f9765c3e-82b"
 SECONDARY_PREFIX = "vz-bcc18906-38f"
 TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
+QUATERNARY_PREFIX = "vz-40d00b68-e91"
 
 # mp4 quality options
 MP4_QUALITIES = [
