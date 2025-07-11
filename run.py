@@ -14,8 +14,11 @@ SECONDARY_PREFIX = "vz-bcc18906-38f"
 TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
 QUATERNARY_PREFIX = "vz-40d00b68-e91"
 
-# Quality options for direct MP4 fallback
+# MP4 fallback options
 MP4_QUALITIES = ["play_720p.mp4", "play_480p.mp4", "play_360p.mp4", "play_240p.mp4"]
+# Quaternary prefix: explicit video and audio m3u8 lists
+VIDEO_RESOLUTIONS = ["2160p", "1440p", "1080p", "720p", "480p", "360p"]
+AUDIO_QUALITIES = ["256a", "192a", "128a", "96a"]
 
 # Directories
 TEMP_DIR = os.path.join(os.getcwd(), "downloads")
@@ -36,10 +39,10 @@ def fetch_title(url: str) -> str:
         raise ValueError("Page title not found")
     title = m.group(1).strip()
     if '|' in title:
-        title = title.split('|', 1)[1].strip()
+        title = title.split('|',1)[1].strip()
     elif '_' in title:
-        parts = re.split(r'_\s*', title, 1)
-        title = parts[1].strip() if len(parts) > 1 else title
+        parts = re.split(r'_\s*', title,1)
+        title = parts[1].strip() if len(parts)>1 else title
     return title
 
 
@@ -58,97 +61,84 @@ def move_to_android(src: str, name: str) -> None:
     shutil.move(src, dst)
 
 
+def merge_with_ffmpeg(video_file: str, audio_m3u8: str, output_file: str) -> None:
+    cmd = ["ffmpeg", "-i", video_file, "-i", audio_m3u8, "-c", "copy", "-y", output_file]
+    subprocess.run(cmd, check=True)
+
+
 def download_quaternary(info: dict) -> bool:
-    """
-    Download from the quaternary prefix using the master playlist, selecting best video+audio.
-    """
     vid, name, referer = info['video_id'], info['name'], info['referer']
     os.makedirs(TEMP_DIR, exist_ok=True)
-    temp_path = os.path.join(TEMP_DIR, f"{name}.mp4")
-    m3u8_url = f"https://{QUATERNARY_PREFIX}.b-cdn.net/{vid}/playlist.m3u8"
-    cmd = [
-        "yt-dlp",
-        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
-        "-o", temp_path,
-        "--referer", referer,
-        "--hls-use-mpegts",
-        m3u8_url
-    ]
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if os.path.exists(temp_path):
-            move_to_android(temp_path, name)
-            return True
-    except Exception:
-        pass
+    temp_video = os.path.join(TEMP_DIR, f"{name}_video.mp4")
+    temp_merged = os.path.join(TEMP_DIR, f"{name}.mp4")
+    headers = {"User-Agent":"Mozilla/5.0","Referer":referer}
+    # Try video resolutions
+    for res in VIDEO_RESOLUTIONS:
+        video_m3u8 = f"https://{QUATERNARY_PREFIX}.b-cdn.net/{vid}/video/{res}/video.m3u8"
+        try:
+            buf=io.StringIO()
+            with redirect_stdout(buf), redirect_stderr(buf):
+                BunnyVideoDRM(referer=referer,m3u8_url=video_m3u8,name=name,path=TEMP_DIR).download()
+            if not os.path.exists(temp_video):
+                continue
+            # Try audio qualities
+            for aq in AUDIO_QUALITIES:
+                audio_m3u8 = f"https://{QUATERNARY_PREFIX}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
+                try:
+                    merge_with_ffmpeg(temp_video,audio_m3u8,temp_merged)
+                    move_to_android(temp_merged,name)
+                    return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
     return False
 
 
 def download_video(info: dict) -> dict:
-    """
-    Attempt download via prefixes: primary/secondary/tertiary with DRM logic, then quaternary.
-    """
-    vid, name, referer = info['video_id'], info['name'], info['referer']
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": referer}
-    prefixes = [PRIMARY_PREFIX, SECONDARY_PREFIX, TERTIARY_PREFIX]
+    vid,name,referer = info['video_id'],info['name'],info['referer']
+    headers={"User-Agent":"Mozilla/5.0","Referer":referer}
+    prefixes=[PRIMARY_PREFIX,SECONDARY_PREFIX,TERTIARY_PREFIX]
     os.makedirs(TEMP_DIR, exist_ok=True)
-
-    # Try primary, secondary, tertiary
+    # Try prefix1-3
     for p in prefixes:
         # m3u8
-        url = f"https://{p}.b-cdn.net/{vid}/playlist.m3u8"
+        m3u8_url=f"https://{p}.b-cdn.net/{vid}/playlist.m3u8"
         try:
-            buf = io.StringIO()
-            with redirect_stdout(buf), redirect_stderr(buf):
-                BunnyVideoDRM(referer=referer, m3u8_url=url, name=name, path=TEMP_DIR).download()
-            temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
-            if os.path.exists(temp_file):
-                move_to_android(temp_file, name)
-                return {"name": referer, "success": True}
-        except:
-            pass
-        # MP4 fallback
+            buf=io.StringIO()
+            with redirect_stdout(buf),redirect_stderr(buf):
+                BunnyVideoDRM(referer=referer,m3u8_url=m3u8_url,name=name,path=TEMP_DIR).download()
+            file=os.path.join(TEMP_DIR,f"{name}.mp4")
+            if os.path.exists(file):move_to_android(file,name);return{"name":referer,"success":True}
+        except:pass
+        # mp4 fallback
         for q in MP4_QUALITIES:
-            mp4_url = f"https://{p}.b-cdn.net/{vid}/{q}"
+            mp4_url=f"https://{p}.b-cdn.net/{vid}/{q}"
             try:
-                resp = requests.get(mp4_url, headers=headers, stream=True, timeout=10)
-                resp.raise_for_status()
-                temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
-                with open(temp_file, 'wb') as f:
-                    for chunk in resp.iter_content(1024*1024): f.write(chunk)
-                move_to_android(temp_file, name)
-                return {"name": referer, "success": True}
-            except:
-                continue
-
-    # Finally try quaternary with combined beststream
-    if download_quaternary(info):
-        return {"name": referer, "success": True}
-    return {"name": referer, "success": False}
+                resp=requests.get(mp4_url,headers=headers,stream=True,timeout=10);resp.raise_for_status()
+                file=os.path.join(TEMP_DIR,f"{name}.mp4")
+                with open(file,'wb') as f: 
+                    for chunk in resp.iter_content(1024*1024):f.write(chunk)
+                move_to_android(file,name);return{"name":referer,"success":True}
+            except:continue
+    # Try quaternary with explicit video+audio
+    if download_quaternary(info):return{"name":referer,"success":True}
+    return{"name":referer,"success":False}
 
 
 def main():
-    raw = input("Enter URLs (space/comma-separated):\n").strip()
-    urls = [u for u in re.split(r"[\s,;]+", raw) if u]
-    if not urls:
-        print("No URLs provided.")
-        return
-    jobs = [build_video_info(u) for u in urls]
-    results = []
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(download_video, job) for job in jobs]
-        for f in as_completed(futures):
-            results.append(f.result())
-
+    raw=input("Enter URLs (space/comma-separated):\n").strip()
+    urls=[u for u in re.split(r"[\s,;]+",raw) if u]
+    if not urls:print("No URLs provided.");return
+    jobs=[build_video_info(u) for u in urls]
+    res=[]
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futures=[ex.submit(download_video,j) for j in jobs]
+        for f in as_completed(futures):res.append(f.result())
     print("\n=== Results ===")
-    for r in results:
-        if r['success']:
-            print(f"[OK] {r['name']}")
-    fails = [r['name'] for r in results if not r['success']]
-    if fails:
-        print("\n=== Failed ===")
-        for e in fails:
-            print(f"- {e}")
+    for r in res:
+        if r['success']:print(f"[OK] {r['name']}")
+    fails=[r['name'] for r in res if not r['success']]
+    if fails:print("\n=== Failed ===");[print(f"- {e}") for e in fails]
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__":main()
