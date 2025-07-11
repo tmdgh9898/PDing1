@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from b_cdn_drm_vod_dl import BunnyVideoDRM
 
 # CDN prefixes
 PRIMARY_PREFIX = "vz-f9765c3e-82b"
@@ -58,14 +59,16 @@ def move_to_android(src: str, name: str) -> None:
 
 
 def download_quaternary(info: dict) -> bool:
+    """
+    Download from the quaternary prefix using the master playlist, selecting best video+audio.
+    """
     vid, name, referer = info['video_id'], info['name'], info['referer']
     os.makedirs(TEMP_DIR, exist_ok=True)
     temp_path = os.path.join(TEMP_DIR, f"{name}.mp4")
-    # Use master playlist, let yt-dlp choose best with audio
     m3u8_url = f"https://{QUATERNARY_PREFIX}.b-cdn.net/{vid}/playlist.m3u8"
     cmd = [
         "yt-dlp",
-        "-f", "best",
+        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
         "-o", temp_path,
         "--referer", referer,
         "--hls-use-mpegts",
@@ -82,15 +85,19 @@ def download_quaternary(info: dict) -> bool:
 
 
 def download_video(info: dict) -> dict:
+    """
+    Attempt download via prefixes: primary/secondary/tertiary with DRM logic, then quaternary.
+    """
     vid, name, referer = info['video_id'], info['name'], info['referer']
     headers = {"User-Agent": "Mozilla/5.0", "Referer": referer}
-    # Try primary/secondary/tertiary with standard m3u8 & mp4 fallback
     prefixes = [PRIMARY_PREFIX, SECONDARY_PREFIX, TERTIARY_PREFIX]
+    os.makedirs(TEMP_DIR, exist_ok=True)
+
+    # Try primary, secondary, tertiary
     for p in prefixes:
         # m3u8
         url = f"https://{p}.b-cdn.net/{vid}/playlist.m3u8"
         try:
-            # suppress output
             buf = io.StringIO()
             with redirect_stdout(buf), redirect_stderr(buf):
                 BunnyVideoDRM(referer=referer, m3u8_url=url, name=name, path=TEMP_DIR).download()
@@ -98,24 +105,23 @@ def download_video(info: dict) -> dict:
             if os.path.exists(temp_file):
                 move_to_android(temp_file, name)
                 return {"name": referer, "success": True}
-        except Exception:
+        except:
             pass
-        # mp4 fallback
+        # MP4 fallback
         for q in MP4_QUALITIES:
             mp4_url = f"https://{p}.b-cdn.net/{vid}/{q}"
             try:
                 resp = requests.get(mp4_url, headers=headers, stream=True, timeout=10)
                 resp.raise_for_status()
-                os.makedirs(TEMP_DIR, exist_ok=True)
                 temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
                 with open(temp_file, 'wb') as f:
-                    for chunk in resp.iter_content(chunk_size=1024*1024):
-                        f.write(chunk)
+                    for chunk in resp.iter_content(1024*1024): f.write(chunk)
                 move_to_android(temp_file, name)
                 return {"name": referer, "success": True}
-            except Exception:
+            except:
                 continue
-    # Quaternary prefix: best combined stream
+
+    # Finally try quaternary with combined beststream
     if download_quaternary(info):
         return {"name": referer, "success": True}
     return {"name": referer, "success": False}
