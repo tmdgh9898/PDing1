@@ -1,12 +1,6 @@
-import os
-import re
-import requests
-import io
-from contextlib import redirect_stdout, redirect_stderr
-from b_cdn_drm_vod_dl import BunnyVideoDRM
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import os import re import requests import io from contextlib import redirect_stdout, redirect_stderr from b_cdn_drm_vod_dl import BunnyVideoDRM from concurrent.futures import ThreadPoolExecutor, as_completed
 
-CDN prefixes
+#CDN prefixes
 
 PRIMARY_PREFIX = "vz-f9765c3e-82b" SECONDARY_PREFIX = "vz-bcc18906-38f" TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
 
@@ -22,7 +16,7 @@ def sanitize_filename(name: str) -> str: """ Remove characters invalid in filena
 
 def fetch_title(url: str) -> str: """ Fetch <title> from given URL and sanitize. """ headers = {"User-Agent": "Mozilla/5.0"} resp = requests.get(url, headers=headers, timeout=10) resp.raise_for_status() match = re.search(r"<title[^>]>(.?)</title>", resp.text, re.IGNORECASE | re.DOTALL) if not match: raise ValueError("Page title not found") title = match.group(1).strip() # Remove prefix before '|' or first underscore if '|' in title: title = title.split('|', 1)[1].strip() elif '' in title: parts = re.split(r'\s*', title, 1) title = parts[1].strip() if len(parts) > 1 else title return title
 
-def build_video_info(url: str) -> dict: """ Extract video_id and sanitize filename. """ match = re.search(r"v=([a-f0-9-]+)", url) if not match: raise ValueError(f"video_id not found in URL: {url}") video_id = match.group(1) name = sanitize_filename(fetch_title(url)) return {"referer": url, "video_id": video_id, "safe_name": name}
+def build_video_info(url: str) -> dict: """ Extract video_id and sanitize filename. """ match = re.search(r"v=([a-f0-9-]+)", url) if not match: raise ValueError(f"video_id not found in URL: {url}") video_id = match.group(1) name = sanitize_filename(fetch_title(url)) return { "referer": url, "video_id": video_id, "safe_name": name }
 
 def download_video(info: dict) -> dict: """ Try m3u8 and mp4 (best quality) across prefixes. """ vid = info['video_id'] name = info['safe_name'] os.makedirs(DOWNLOAD_DIR, exist_ok=True) out_path = os.path.join(DOWNLOAD_DIR, f"{name}.mp4") headers = {"User-Agent": "Mozilla/5.0", "Referer": info['referer']} prefixes = [PRIMARY_PREFIX, SECONDARY_PREFIX, TERTIARY_PREFIX]
 
@@ -33,7 +27,12 @@ for prefix in prefixes:
     try:
         buf = io.StringIO()
         with redirect_stdout(buf), redirect_stderr(buf):
-            job = BunnyVideoDRM(referer=info['referer'], m3u8_url=m3u8_url, name=name, path=DOWNLOAD_DIR)
+            job = BunnyVideoDRM(
+                referer=info['referer'],
+                m3u8_url=m3u8_url,
+                name=name,
+                path=DOWNLOAD_DIR
+            )
             job.download()
         if os.path.exists(out_path):
             return {"name": info['referer'], "success": True}
