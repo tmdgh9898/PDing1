@@ -15,13 +15,10 @@ TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
 QUATERNARY_PREFIX = "vz-40d00b68-e91"
 QUINARY_PREFIX = "vz-6b30db03-fbb"
 
-# Fallback MP4 qualities
 MP4_QUALITIES = ["play_720p.mp4", "play_480p.mp4", "play_360p.mp4", "play_240p.mp4"]
-# Advanced video/audio lists
 VIDEO_RESOLUTIONS = ["2160p", "1440p", "1080p", "720p", "480p", "360p"]
 AUDIO_QUALITIES = ["256a", "192a", "128a", "96a"]
 
-# Directories
 TEMP_DIR = os.path.join(os.getcwd(), "downloads")
 ANDROID_DOWNLOAD_DIR = "/storage/emulated/0/Download"
 INVALID_CHARS = r'[<>:"/\\|?*]'
@@ -51,23 +48,6 @@ def build_video_info(url: str) -> dict:
     name = sanitize_filename(fetch_title(url))
     return {"referer": url, "video_id": vid, "name": name}
 
-def create_thumbnail_grid(video_path: str, thumb_path: str, tile="4x4"):
-    # 4x4=16개 프레임을 타일로 만듦, 중간 프레임들 자동 선택
-    cmd = [
-        "ffmpeg",
-        "-i", video_path,
-        "-vf", f"select='not(mod(n,10))',scale=320:-1,tile={tile}",
-        "-frames:v", "1",
-        thumb_path,
-        "-y"
-    ]
-    try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except Exception as e:
-        print(f"[Thumbnail Error] {e}")
-        return False
-
 def get_video_info(video_path: str) -> dict:
     cmd = [
         "ffprobe",
@@ -93,14 +73,48 @@ def get_video_info(video_path: str) -> dict:
         print(f"[Info Error] {e}")
         return {}
 
+def get_video_info_str(video_path: str) -> str:
+    info = get_video_info(video_path)
+    if not info:
+        return ""
+    duration_sec = int(float(info.get("duration", 0)))
+    h, rem = divmod(duration_sec, 3600)
+    m, s = divmod(rem, 60)
+    duration_str = f"{h:02d}:{m:02d}:{s:02d}"
+    txt = (
+        f"{info.get('resolution','')} | {duration_str} | "
+        f"V:{info.get('vcodec','')} / A:{info.get('acodec','')}"
+    )
+    return txt
+
+def create_thumbnail_grid_with_info(video_path: str, thumb_path: str, tile="4x4"):
+    info_str = get_video_info_str(video_path)
+    fontfile = "/system/fonts/DroidSansMono.ttf"  # 실제 폰트 경로를 맞춰주세요 (한글필요시 NotoSansKR)
+    cmd = [
+        "ffmpeg", "-i", video_path,
+        "-vf", (
+            f"select='not(mod(n,10))',scale=320:-1,tile={tile},"
+            f"drawbox=y=ih-40:color=black@0.7:width=iw:height=40:t=fill,"
+            f"drawtext=fontfile='{fontfile}':text='{info_str}':"
+            "fontcolor=white:fontsize=24:x=(w-text_w)/2:y=h-35"
+        ),
+        "-frames:v", "1", thumb_path, "-y"
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        print(f"[Thumbnail Error] {e}")
+        return False
+
 def move_to_android(src: str, name: str) -> None:
     os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
     dst = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}.mp4")
     shutil.move(src, dst)
-    # 썸네일 타일 생성
+    # 썸네일 타일 + 영상 정보
     thumb_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_thumb.jpg")
-    create_thumbnail_grid(dst, thumb_path)
-    # 영상 정보 추출 및 저장
+    create_thumbnail_grid_with_info(dst, thumb_path)
+    # 영상 정보 txt 저장(필요시)
     info = get_video_info(dst)
     info_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_info.txt")
     with open(info_path, "w") as f:
@@ -108,9 +122,6 @@ def move_to_android(src: str, name: str) -> None:
             f.write(f"{k}: {v}\n")
 
 def download_advanced(info: dict, prefix: str) -> bool:
-    """
-    Download best video+audio streams for advanced prefixes.
-    """
     vid, name, referer = info['video_id'], info['name'], info['referer']
     os.makedirs(TEMP_DIR, exist_ok=True)
     # download video streams
@@ -155,7 +166,6 @@ def download_video(info: dict) -> dict:
     os.makedirs(TEMP_DIR, exist_ok=True)
     # primary & secondary basic
     for prefix in [PRIMARY_PREFIX, SECONDARY_PREFIX]:
-        # standard m3u8
         url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
         try:
             buf = io.StringIO()
@@ -167,7 +177,6 @@ def download_video(info: dict) -> dict:
                 return {"name": referer, "success": True}
         except:
             pass
-        # MP4 fallback
         for q in MP4_QUALITIES:
             try:
                 resp = requests.get(f"https://{prefix}.b-cdn.net/{vid}/{q}", headers=headers, stream=True, timeout=10)
@@ -179,13 +188,10 @@ def download_video(info: dict) -> dict:
                 return {"name": referer, "success": True}
             except:
                 continue
-    # tertiary advanced
     if download_advanced(info, TERTIARY_PREFIX):
         return {"name": referer, "success": True}
-    # quaternary advanced
     if download_advanced(info, QUATERNARY_PREFIX):
         return {"name": referer, "success": True}
-    # quinary advanced
     if download_advanced(info, QUINARY_PREFIX):
         return {"name": referer, "success": True}
     return {"name": referer, "success": False}
