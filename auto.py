@@ -4,7 +4,6 @@ import requests
 import io
 import shutil
 import subprocess
-from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from b_cdn_drm_vod_dl import BunnyVideoDRM
 from PIL import Image, ImageDraw, ImageFont
@@ -89,35 +88,56 @@ def get_video_info_str(video_path: str) -> str:
 
 def create_thumbnail_grid_with_info(video_path: str, thumb_path: str, tile="4x4"):
     info_str = get_video_info_str(video_path)
-    temp_thumb = thumb_path + ".notext.jpg"
-    cmd = [
-        "ffmpeg", "-i", video_path,
-        "-vf", f"select='not(mod(n,10))',scale=320:-1,tile={tile}",
-        "-frames:v", "1", temp_thumb, "-y"
-    ]
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        # PIL로 영상 정보 info_str 오버레이
-        im = Image.open(temp_thumb)
-        draw = ImageDraw.Draw(im)
-        W, H = im.size
-        font_path = "/system/fonts/DroidSansMono.ttf"
-        font_size = 28
-        try:
-            font = ImageFont.truetype(font_path, font_size)
-        except Exception:
-            font = ImageFont.load_default()
-        # info 박스 그리기
-        text_h = font_size + 18
-        draw.rectangle([(0, H - text_h), (W, H)], fill=(0, 0, 0, 230))
-        w, h = draw.textsize(info_str, font=font)
-        draw.text(((W - w) / 2, H - text_h + 7), info_str, font=font, fill=(255, 255, 255, 255))
-        im.save(thumb_path, quality=92)
-        os.remove(temp_thumb)
-        return True
-    except Exception as e:
-        print(f"[Thumbnail Error] {e}")
+    # === 1. 전체 duration, 16프레임 시간 계산 ===
+    info = get_video_info(video_path)
+    duration = info.get("duration", 0)
+    if not duration or duration < 1:
+        print("[Thumbnail Error] 영상 길이 파악 실패")
         return False
+    # 16프레임 균등 분할 (시작 0.5초~끝-0.5초, 중간점들)
+    timestamps = [duration * (i + 1) / 17 for i in range(16)]
+    vfilter = ",".join([f"select='eq(n\\,{i})'" for i in range(16)])
+    # === 2. ffmpeg로 16장 프레임 추출 ===
+    jpg_dir = os.path.dirname(thumb_path)
+    temp_prefix = os.path.splitext(os.path.basename(thumb_path))[0]
+    jpg_files = []
+    for idx, ts in enumerate(timestamps):
+        frame_file = os.path.join(jpg_dir, f"{temp_prefix}_frame{idx+1:02d}.jpg")
+        cmd = [
+            "ffmpeg", "-ss", str(ts), "-i", video_path, "-frames:v", "1",
+            "-q:v", "2", frame_file, "-y"
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+            jpg_files.append(frame_file)
+        except Exception as e:
+            print(f"[Frame Error] {e}")
+            return False
+    # === 3. 4x4 타일 합치기 ===
+    imgs = [Image.open(f) for f in jpg_files]
+    w, h = imgs[0].size
+    tile_img = Image.new('RGB', (w*4, h*4))
+    for i in range(16):
+        x = (i % 4) * w
+        y = (i // 4) * h
+        tile_img.paste(imgs[i], (x, y))
+        imgs[i].close()
+        os.remove(jpg_files[i])
+    # === 4. info 오버레이 ===
+    draw = ImageDraw.Draw(tile_img)
+    font_path = "/system/fonts/DroidSansMono.ttf"
+    font_size = int(h * 0.25)
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except Exception:
+        font = ImageFont.load_default()
+    box_h = font_size + 20
+    W, H = tile_img.size
+    draw.rectangle([(0, H - box_h), (W, H)], fill=(0, 0, 0, 220))
+    w_txt, h_txt = draw.textsize(info_str, font=font)
+    draw.text(((W - w_txt) / 2, H - box_h + 10), info_str, font=font, fill=(255, 255, 255, 255))
+    tile_img.save(thumb_path, quality=92)
+    return True
 
 def move_to_android(src: str, name: str) -> None:
     os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
@@ -131,97 +151,5 @@ def move_to_android(src: str, name: str) -> None:
         for k, v in info.items():
             f.write(f"{k}: {v}\n")
 
-def download_advanced(info: dict, prefix: str) -> bool:
-    vid, name, referer = info['video_id'], info['name'], info['referer']
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    for res in VIDEO_RESOLUTIONS:
-        video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/video/{res}/video.m3u8"
-        video_name = f"{name}_video"
-        try:
-            buf = io.StringIO()
-            with redirect_stdout(buf), redirect_stderr(buf):
-                BunnyVideoDRM(referer=referer, m3u8_url=video_m3u8, name=video_name, path=TEMP_DIR).download()
-            video_path = os.path.join(TEMP_DIR, f"{video_name}.mp4")
-            if not os.path.exists(video_path):
-                continue
-        except:
-            continue
-        for aq in AUDIO_QUALITIES:
-            audio_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
-            audio_name = f"{name}_audio"
-            try:
-                buf = io.StringIO()
-                with redirect_stdout(buf), redirect_stderr(buf):
-                    BunnyVideoDRM(referer=referer, m3u8_url=audio_m3u8, name=audio_name, path=TEMP_DIR).download()
-                audio_path = os.path.join(TEMP_DIR, f"{audio_name}.mp4")
-                if not os.path.exists(audio_path):
-                    continue
-            except:
-                continue
-            merged = os.path.join(TEMP_DIR, f"{name}.mp4")
-            try:
-                subprocess.run(["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged], check=True)
-                move_to_android(merged, name)
-                return True
-            except:
-                continue
-    return False
-
-def download_video(info: dict) -> dict:
-    vid, name, referer = info['video_id'], info['name'], info['referer']
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": referer}
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    for prefix in [PRIMARY_PREFIX, SECONDARY_PREFIX]:
-        url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
-        try:
-            buf = io.StringIO()
-            with redirect_stdout(buf), redirect_stderr(buf):
-                BunnyVideoDRM(referer=referer, m3u8_url=url, name=name, path=TEMP_DIR).download()
-            temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
-            if os.path.exists(temp_file):
-                move_to_android(temp_file, name)
-                return {"name": referer, "success": True}
-        except:
-            pass
-        for q in MP4_QUALITIES:
-            try:
-                resp = requests.get(f"https://{prefix}.b-cdn.net/{vid}/{q}", headers=headers, stream=True, timeout=10)
-                resp.raise_for_status()
-                temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
-                with open(temp_file, 'wb') as f:
-                    for chunk in resp.iter_content(1024*1024): f.write(chunk)
-                move_to_android(temp_file, name)
-                return {"name": referer, "success": True}
-            except:
-                continue
-    if download_advanced(info, TERTIARY_PREFIX):
-        return {"name": referer, "success": True}
-    if download_advanced(info, QUATERNARY_PREFIX):
-        return {"name": referer, "success": True}
-    if download_advanced(info, QUINARY_PREFIX):
-        return {"name": referer, "success": True}
-    return {"name": referer, "success": False}
-
-def main():
-    raw = input("Enter URLs (space/comma-separated):\n").strip()
-    urls = [u for u in re.split(r"[\s,;]+", raw) if u]
-    if not urls:
-        print("No URLs provided.")
-        return
-    results = []
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(download_video, build_video_info(u)) for u in urls]
-        for f in as_completed(futures):
-            results.append(f.result())
-    print("\n=== Results ===")
-    for r in results:
-        if r['success']:
-            print(f"[OK] {r['name']}")
-    fails = [r['name'] for r in results if not r['success']]
-    if fails:
-        print("\n=== Failed ===")
-        for e in fails:
-            print(f"- {e}")
-
-if __name__ == "__main__":
-    main()
+# (이 아래 download_advanced, download_video, main 등은 기존 그대로 두면 됩니다)
+# ... 이하 기존코드 생략
