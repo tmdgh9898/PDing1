@@ -8,6 +8,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from b_cdn_drm_vod_dl import BunnyVideoDRM
 
+# CDN prefixes
 PRIMARY_PREFIX = "vz-f9765c3e-82b"
 SECONDARY_PREFIX = "vz-bcc18906-38f"
 TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
@@ -88,7 +89,11 @@ def get_video_info_str(video_path: str) -> str:
 
 def create_thumbnail_grid_with_info(video_path: str, thumb_path: str, tile="4x4"):
     info_str = get_video_info_str(video_path)
-    fontfile = "/system/fonts/DroidSansMono.ttf"
+    # 실제 존재하는 폰트로 바꿔주세요!
+    fontfile_kr = "/system/fonts/NotoSansKR-Regular.otf"  # 한글 지원
+    fontfile_en = "/system/fonts/DroidSansMono.ttf"       # 영문만
+    # 아래에서 실제로 존재하는 폰트로 사용
+    fontfile = fontfile_kr if os.path.exists(fontfile_kr) else fontfile_en
     if not os.path.exists(fontfile):
         print(f"[Thumbnail Warning] Font file not found: {fontfile}. 썸네일은 drawtext 없이 생성됩니다.")
         cmd = [
@@ -120,8 +125,10 @@ def move_to_android(src: str, name: str) -> None:
     os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
     dst = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}.mp4")
     shutil.move(src, dst)
+    # 썸네일 타일 + 영상 정보
     thumb_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_thumb.jpg")
     create_thumbnail_grid_with_info(dst, thumb_path)
+    # 영상 정보 txt 저장
     info = get_video_info(dst)
     info_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_info.txt")
     with open(info_path, "w") as f:
@@ -216,3 +223,9 @@ def main():
             print(f"[OK] {r['name']}")
     fails = [r['name'] for r in results if not r['success']]
     if fails:
+        print("\n=== Failed ===")
+        for e in fails:
+            print(f"- {e}")
+
+if __name__ == "__main__":
+    main()
