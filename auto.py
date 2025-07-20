@@ -7,8 +7,8 @@ import subprocess
 from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from b_cdn_drm_vod_dl import BunnyVideoDRM
+from PIL import Image, ImageDraw, ImageFont
 
-# CDN prefixes
 PRIMARY_PREFIX = "vz-f9765c3e-82b"
 SECONDARY_PREFIX = "vz-bcc18906-38f"
 TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
@@ -89,29 +89,31 @@ def get_video_info_str(video_path: str) -> str:
 
 def create_thumbnail_grid_with_info(video_path: str, thumb_path: str, tile="4x4"):
     info_str = get_video_info_str(video_path)
-    fontfile = "/system/fonts/DroidSansMono.ttf"
-    if not os.path.exists(fontfile):
-        print(f"[Thumbnail Warning] Font file not found: {fontfile}. 썸네일은 drawtext 없이 생성됩니다.")
-        cmd = [
-            "ffmpeg", "-i", video_path,
-            "-vf", f"select='not(mod(n,10))',scale=320:-1,tile={tile}",
-            "-frames:v", "1", thumb_path, "-y"
-        ]
-    else:
-        cmd = [
-            "ffmpeg", "-i", video_path,
-            "-vf", (
-                f"select='not(mod(n,10))',scale=320:-1,tile={tile},"
-                f"drawbox=y=ih-40:color=black@0.7:width=iw:height=40:t=fill,"
-                f"drawtext=fontfile='{fontfile}':text='{info_str}':"
-                "fontcolor=white:fontsize=24:x=(w-text_w)/2:y=h-35"
-            ),
-            "-frames:v", "1", thumb_path, "-y"
-        ]
+    temp_thumb = thumb_path + ".notext.jpg"
+    cmd = [
+        "ffmpeg", "-i", video_path,
+        "-vf", f"select='not(mod(n,10))',scale=320:-1,tile={tile}",
+        "-frames:v", "1", temp_thumb, "-y"
+    ]
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"[Thumbnail ffmpeg stderr] {result.stderr}")
+        # PIL로 영상 정보 info_str 오버레이
+        im = Image.open(temp_thumb)
+        draw = ImageDraw.Draw(im)
+        W, H = im.size
+        font_path = "/system/fonts/DroidSansMono.ttf"
+        font_size = 28
+        try:
+            font = ImageFont.truetype(font_path, font_size)
+        except Exception:
+            font = ImageFont.load_default()
+        # info 박스 그리기
+        text_h = font_size + 18
+        draw.rectangle([(0, H - text_h), (W, H)], fill=(0, 0, 0, 230))
+        w, h = draw.textsize(info_str, font=font)
+        draw.text(((W - w) / 2, H - text_h + 7), info_str, font=font, fill=(255, 255, 255, 255))
+        im.save(thumb_path, quality=92)
+        os.remove(temp_thumb)
         return True
     except Exception as e:
         print(f"[Thumbnail Error] {e}")
