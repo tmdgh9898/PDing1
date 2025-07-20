@@ -8,6 +8,8 @@ from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from b_cdn_drm_vod_dl import BunnyVideoDRM
 
+from PIL import Image, ImageDraw, ImageFont
+
 # CDN prefixes
 PRIMARY_PREFIX = "vz-f9765c3e-82b"
 SECONDARY_PREFIX = "vz-bcc18906-38f"
@@ -87,35 +89,56 @@ def get_video_info_str(video_path: str) -> str:
     )
     return txt
 
+# 🔥 오직 이 함수만, 완벽히 타일+오버레이 썸네일용으로 교체!
 def create_thumbnail_grid_with_info(video_path: str, thumb_path: str, tile="4x4"):
     info_str = get_video_info_str(video_path)
-    fontfile = "/system/fonts/DroidSansMono.ttf"
-    if not os.path.exists(fontfile):
-        print(f"[Thumbnail Warning] Font file not found: {fontfile}. 썸네일은 drawtext 없이 생성됩니다.")
-        cmd = [
-            "ffmpeg", "-i", video_path,
-            "-vf", f"select='not(mod(n,10))',scale=320:-1,tile={tile}",
-            "-frames:v", "1", thumb_path, "-y"
-        ]
-    else:
-        cmd = [
-            "ffmpeg", "-i", video_path,
-            "-vf", (
-                f"select='not(mod(n,10))',scale=320:-1,tile={tile},"
-                f"drawbox=y=ih-40:color=black@0.7:width=iw:height=40:t=fill,"
-                f"drawtext=fontfile='{fontfile}':text='{info_str}':"
-                "fontcolor=white:fontsize=24:x=(w-text_w)/2:y=h-35"
-            ),
-            "-frames:v", "1", thumb_path, "-y"
-        ]
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"[Thumbnail ffmpeg stderr] {result.stderr}")
-        return True
-    except Exception as e:
-        print(f"[Thumbnail Error] {e}")
+    tile_num = 4
+    # duration 구하기
+    info = get_video_info(video_path)
+    duration = info.get("duration", 0)
+    if not duration or duration < 1:
+        print("[Thumbnail Error] 영상 길이 파악 실패")
         return False
+    # 16개 구간 타임스탬프
+    timestamps = [duration * (i + 1) / 17 for i in range(16)]
+    jpgs = []
+    for idx, ts in enumerate(timestamps):
+        outjpg = thumb_path + f".frame{idx+1:02d}.jpg"
+        cmd = [
+            "ffmpeg", "-ss", str(ts), "-i", video_path,
+            "-frames:v", "1", "-q:v", "2", outjpg, "-y"
+        ]
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            jpgs.append(outjpg)
+        except Exception as e:
+            print(f"[Frame Error] {e}")
+            return False
+    # 4x4 타일 합치기 (Pillow)
+    from PIL import Image, ImageDraw, ImageFont
+    imgs = [Image.open(f) for f in jpgs]
+    w, h = imgs[0].size
+    grid = Image.new('RGB', (w*tile_num, h*tile_num))
+    for i, img in enumerate(imgs):
+        x, y = (i % tile_num) * w, (i // tile_num) * h
+        grid.paste(img, (x, y))
+        img.close()
+        os.remove(jpgs[i])
+    # 하단 info 오버레이
+    draw = ImageDraw.Draw(grid)
+    font_path = "/system/fonts/DroidSansMono.ttf"
+    font_size = int(h * 0.35)
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except Exception:
+        font = ImageFont.load_default()
+    box_h = font_size + 20
+    W, H = grid.size
+    draw.rectangle([(0, H - box_h), (W, H)], fill=(0, 0, 0, 230))
+    w_txt, h_txt = draw.textsize(info_str, font=font)
+    draw.text(((W - w_txt) / 2, H - box_h + 10), info_str, font=font, fill=(255, 255, 255, 255))
+    grid.save(thumb_path, quality=92)
+    return True
 
 def move_to_android(src: str, name: str) -> None:
     os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
