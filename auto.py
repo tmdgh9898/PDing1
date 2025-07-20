@@ -8,8 +8,6 @@ from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from b_cdn_drm_vod_dl import BunnyVideoDRM
 
-from PIL import Image, ImageDraw, ImageFont
-
 # CDN prefixes
 PRIMARY_PREFIX = "vz-f9765c3e-82b"
 SECONDARY_PREFIX = "vz-bcc18906-38f"
@@ -17,16 +15,21 @@ TERTIARY_PREFIX = "vz-b3fe6a46-b2b"
 QUATERNARY_PREFIX = "vz-40d00b68-e91"
 QUINARY_PREFIX = "vz-6b30db03-fbb"
 
+# Fallback MP4 qualities
 MP4_QUALITIES = ["play_720p.mp4", "play_480p.mp4", "play_360p.mp4", "play_240p.mp4"]
+# Advanced video/audio lists
 VIDEO_RESOLUTIONS = ["2160p", "1440p", "1080p", "720p", "480p", "360p"]
 AUDIO_QUALITIES = ["256a", "192a", "128a", "96a"]
 
+# Directories
 TEMP_DIR = os.path.join(os.getcwd(), "downloads")
 ANDROID_DOWNLOAD_DIR = "/storage/emulated/0/Download"
 INVALID_CHARS = r'[<>:"/\\|?*]'
 
+
 def sanitize_filename(name: str) -> str:
     return re.sub(INVALID_CHARS, '_', name)
+
 
 def fetch_title(url: str) -> str:
     resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
@@ -42,6 +45,7 @@ def fetch_title(url: str) -> str:
         title = parts[1].strip() if len(parts) > 1 else title
     return title
 
+
 def build_video_info(url: str) -> dict:
     m = re.search(r"v=([a-f0-9\-]+)", url)
     if not m:
@@ -50,111 +54,20 @@ def build_video_info(url: str) -> dict:
     name = sanitize_filename(fetch_title(url))
     return {"referer": url, "video_id": vid, "name": name}
 
-def get_video_info(video_path: str) -> dict:
-    cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration:stream=codec_name,width,height",
-        "-of", "json",
-        video_path
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        import json
-        info = json.loads(result.stdout)
-        streams = info.get("streams", [])
-        video_stream = next((s for s in streams if s.get("width")), None)
-        audio_stream = next((s for s in streams if s.get("codec_name") and not s.get("width")), None)
-        return {
-            "duration": float(info["format"]["duration"]),
-            "resolution": f"{video_stream['width']}x{video_stream['height']}" if video_stream else "N/A",
-            "vcodec": video_stream["codec_name"] if video_stream else "N/A",
-            "acodec": audio_stream["codec_name"] if audio_stream else "N/A",
-        }
-    except Exception as e:
-        print(f"[Info Error] {e}")
-        return {}
-
-def get_video_info_str(video_path: str) -> str:
-    info = get_video_info(video_path)
-    if not info:
-        return ""
-    duration_sec = int(float(info.get("duration", 0)))
-    h, rem = divmod(duration_sec, 3600)
-    m, s = divmod(rem, 60)
-    duration_str = f"{h:02d}:{m:02d}:{s:02d}"
-    txt = (
-        f"{info.get('resolution','')} | {duration_str} | "
-        f"V:{info.get('vcodec','')} / A:{info.get('acodec','')}"
-    )
-    return txt
-
-# 🔥 오직 이 함수만, 완벽히 타일+오버레이 썸네일용으로 교체!
-def create_thumbnail_grid_with_info(video_path: str, thumb_path: str, tile="4x4"):
-    info_str = get_video_info_str(video_path)
-    tile_num = 4
-    # duration 구하기
-    info = get_video_info(video_path)
-    duration = info.get("duration", 0)
-    if not duration or duration < 1:
-        print("[Thumbnail Error] 영상 길이 파악 실패")
-        return False
-    # 16개 구간 타임스탬프
-    timestamps = [duration * (i + 1) / 17 for i in range(16)]
-    jpgs = []
-    for idx, ts in enumerate(timestamps):
-        outjpg = thumb_path + f".frame{idx+1:02d}.jpg"
-        cmd = [
-            "ffmpeg", "-ss", str(ts), "-i", video_path,
-            "-frames:v", "1", "-q:v", "2", outjpg, "-y"
-        ]
-        try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            jpgs.append(outjpg)
-        except Exception as e:
-            print(f"[Frame Error] {e}")
-            return False
-    # 4x4 타일 합치기 (Pillow)
-    from PIL import Image, ImageDraw, ImageFont
-    imgs = [Image.open(f) for f in jpgs]
-    w, h = imgs[0].size
-    grid = Image.new('RGB', (w*tile_num, h*tile_num))
-    for i, img in enumerate(imgs):
-        x, y = (i % tile_num) * w, (i // tile_num) * h
-        grid.paste(img, (x, y))
-        img.close()
-        os.remove(jpgs[i])
-    # 하단 info 오버레이
-    draw = ImageDraw.Draw(grid)
-    font_path = "/system/fonts/DroidSansMono.ttf"
-    font_size = int(h * 0.35)
-    try:
-        font = ImageFont.truetype(font_path, font_size)
-    except Exception:
-        font = ImageFont.load_default()
-    box_h = font_size + 20
-    W, H = grid.size
-    draw.rectangle([(0, H - box_h), (W, H)], fill=(0, 0, 0, 230))
-    w_txt, h_txt = draw.textsize(info_str, font=font)
-    draw.text(((W - w_txt) / 2, H - box_h + 10), info_str, font=font, fill=(255, 255, 255, 255))
-    grid.save(thumb_path, quality=92)
-    return True
 
 def move_to_android(src: str, name: str) -> None:
     os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
     dst = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}.mp4")
     shutil.move(src, dst)
-    thumb_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_thumb.jpg")
-    create_thumbnail_grid_with_info(dst, thumb_path)
-    info = get_video_info(dst)
-    info_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_info.txt")
-    with open(info_path, "w") as f:
-        for k, v in info.items():
-            f.write(f"{k}: {v}\n")
+
 
 def download_advanced(info: dict, prefix: str) -> bool:
+    """
+    Download best video+audio streams for advanced prefixes.
+    """
     vid, name, referer = info['video_id'], info['name'], info['referer']
     os.makedirs(TEMP_DIR, exist_ok=True)
+    # download video streams
     for res in VIDEO_RESOLUTIONS:
         video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/video/{res}/video.m3u8"
         video_name = f"{name}_video"
@@ -167,6 +80,7 @@ def download_advanced(info: dict, prefix: str) -> bool:
                 continue
         except:
             continue
+        # download audio streams
         for aq in AUDIO_QUALITIES:
             audio_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
             audio_name = f"{name}_audio"
@@ -179,6 +93,7 @@ def download_advanced(info: dict, prefix: str) -> bool:
                     continue
             except:
                 continue
+            # merge and move
             merged = os.path.join(TEMP_DIR, f"{name}.mp4")
             try:
                 subprocess.run(["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged], check=True)
@@ -188,11 +103,14 @@ def download_advanced(info: dict, prefix: str) -> bool:
                 continue
     return False
 
+
 def download_video(info: dict) -> dict:
     vid, name, referer = info['video_id'], info['name'], info['referer']
     headers = {"User-Agent": "Mozilla/5.0", "Referer": referer}
     os.makedirs(TEMP_DIR, exist_ok=True)
+    # primary & secondary basic
     for prefix in [PRIMARY_PREFIX, SECONDARY_PREFIX]:
+        # standard m3u8
         url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
         try:
             buf = io.StringIO()
@@ -204,6 +122,7 @@ def download_video(info: dict) -> dict:
                 return {"name": referer, "success": True}
         except:
             pass
+        # MP4 fallback
         for q in MP4_QUALITIES:
             try:
                 resp = requests.get(f"https://{prefix}.b-cdn.net/{vid}/{q}", headers=headers, stream=True, timeout=10)
@@ -215,13 +134,17 @@ def download_video(info: dict) -> dict:
                 return {"name": referer, "success": True}
             except:
                 continue
+    # tertiary advanced
     if download_advanced(info, TERTIARY_PREFIX):
         return {"name": referer, "success": True}
+    # quaternary advanced
     if download_advanced(info, QUATERNARY_PREFIX):
         return {"name": referer, "success": True}
+    # quinary advanced
     if download_advanced(info, QUINARY_PREFIX):
         return {"name": referer, "success": True}
     return {"name": referer, "success": False}
+
 
 def main():
     raw = input("Enter URLs (space/comma-separated):\n").strip()
