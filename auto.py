@@ -26,10 +26,8 @@ TEMP_DIR = os.path.join(os.getcwd(), "downloads")
 ANDROID_DOWNLOAD_DIR = "/storage/emulated/0/Download"
 INVALID_CHARS = r'[<>:"/\\|?*]'
 
-
 def sanitize_filename(name: str) -> str:
     return re.sub(INVALID_CHARS, '_', name)
-
 
 def fetch_title(url: str) -> str:
     resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
@@ -45,7 +43,6 @@ def fetch_title(url: str) -> str:
         title = parts[1].strip() if len(parts) > 1 else title
     return title
 
-
 def build_video_info(url: str) -> dict:
     m = re.search(r"v=([a-f0-9\-]+)", url)
     if not m:
@@ -54,12 +51,61 @@ def build_video_info(url: str) -> dict:
     name = sanitize_filename(fetch_title(url))
     return {"referer": url, "video_id": vid, "name": name}
 
+def create_thumbnail_grid(video_path: str, thumb_path: str, tile="4x4"):
+    # 4x4=16개 프레임을 타일로 만듦, 중간 프레임들 자동 선택
+    cmd = [
+        "ffmpeg",
+        "-i", video_path,
+        "-vf", f"select='not(mod(n,10))',scale=320:-1,tile={tile}",
+        "-frames:v", "1",
+        thumb_path,
+        "-y"
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        print(f"[Thumbnail Error] {e}")
+        return False
+
+def get_video_info(video_path: str) -> dict:
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration:stream=codec_name,width,height",
+        "-of", "json",
+        video_path
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        import json
+        info = json.loads(result.stdout)
+        streams = info.get("streams", [])
+        video_stream = next((s for s in streams if s.get("width")), None)
+        audio_stream = next((s for s in streams if s.get("codec_name") and not s.get("width")), None)
+        return {
+            "duration": float(info["format"]["duration"]),
+            "resolution": f"{video_stream['width']}x{video_stream['height']}" if video_stream else "N/A",
+            "vcodec": video_stream["codec_name"] if video_stream else "N/A",
+            "acodec": audio_stream["codec_name"] if audio_stream else "N/A",
+        }
+    except Exception as e:
+        print(f"[Info Error] {e}")
+        return {}
 
 def move_to_android(src: str, name: str) -> None:
     os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
     dst = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}.mp4")
     shutil.move(src, dst)
-
+    # 썸네일 타일 생성
+    thumb_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_thumb.jpg")
+    create_thumbnail_grid(dst, thumb_path)
+    # 영상 정보 추출 및 저장
+    info = get_video_info(dst)
+    info_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_info.txt")
+    with open(info_path, "w") as f:
+        for k, v in info.items():
+            f.write(f"{k}: {v}\n")
 
 def download_advanced(info: dict, prefix: str) -> bool:
     """
@@ -103,7 +149,6 @@ def download_advanced(info: dict, prefix: str) -> bool:
                 continue
     return False
 
-
 def download_video(info: dict) -> dict:
     vid, name, referer = info['video_id'], info['name'], info['referer']
     headers = {"User-Agent": "Mozilla/5.0", "Referer": referer}
@@ -144,7 +189,6 @@ def download_video(info: dict) -> dict:
     if download_advanced(info, QUINARY_PREFIX):
         return {"name": referer, "success": True}
     return {"name": referer, "success": False}
-
 
 def main():
     raw = input("Enter URLs (space/comma-separated):\n").strip()
