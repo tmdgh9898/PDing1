@@ -89,19 +89,29 @@ def get_video_info_str(video_path: str) -> str:
 
 def create_thumbnail_grid_with_info(video_path: str, thumb_path: str, tile="4x4"):
     info_str = get_video_info_str(video_path)
-    fontfile = "/system/fonts/DroidSansMono.ttf"  # 실제 폰트 경로를 맞춰주세요 (한글필요시 NotoSansKR)
-    cmd = [
-        "ffmpeg", "-i", video_path,
-        "-vf", (
-            f"select='not(mod(n,10))',scale=320:-1,tile={tile},"
-            f"drawbox=y=ih-40:color=black@0.7:width=iw:height=40:t=fill,"
-            f"drawtext=fontfile='{fontfile}':text='{info_str}':"
-            "fontcolor=white:fontsize=24:x=(w-text_w)/2:y=h-35"
-        ),
-        "-frames:v", "1", thumb_path, "-y"
-    ]
+    fontfile = "/system/fonts/DroidSansMono.ttf"
+    if not os.path.exists(fontfile):
+        print(f"[Thumbnail Warning] Font file not found: {fontfile}. 썸네일은 drawtext 없이 생성됩니다.")
+        cmd = [
+            "ffmpeg", "-i", video_path,
+            "-vf", f"select='not(mod(n,10))',scale=320:-1,tile={tile}",
+            "-frames:v", "1", thumb_path, "-y"
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-i", video_path,
+            "-vf", (
+                f"select='not(mod(n,10))',scale=320:-1,tile={tile},"
+                f"drawbox=y=ih-40:color=black@0.7:width=iw:height=40:t=fill,"
+                f"drawtext=fontfile='{fontfile}':text='{info_str}':"
+                "fontcolor=white:fontsize=24:x=(w-text_w)/2:y=h-35"
+            ),
+            "-frames:v", "1", thumb_path, "-y"
+        ]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"[Thumbnail ffmpeg stderr] {result.stderr}")
         return True
     except Exception as e:
         print(f"[Thumbnail Error] {e}")
@@ -111,10 +121,8 @@ def move_to_android(src: str, name: str) -> None:
     os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
     dst = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}.mp4")
     shutil.move(src, dst)
-    # 썸네일 타일 + 영상 정보
     thumb_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_thumb.jpg")
     create_thumbnail_grid_with_info(dst, thumb_path)
-    # 영상 정보 txt 저장(필요시)
     info = get_video_info(dst)
     info_path = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}_info.txt")
     with open(info_path, "w") as f:
@@ -124,7 +132,6 @@ def move_to_android(src: str, name: str) -> None:
 def download_advanced(info: dict, prefix: str) -> bool:
     vid, name, referer = info['video_id'], info['name'], info['referer']
     os.makedirs(TEMP_DIR, exist_ok=True)
-    # download video streams
     for res in VIDEO_RESOLUTIONS:
         video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/video/{res}/video.m3u8"
         video_name = f"{name}_video"
@@ -137,7 +144,6 @@ def download_advanced(info: dict, prefix: str) -> bool:
                 continue
         except:
             continue
-        # download audio streams
         for aq in AUDIO_QUALITIES:
             audio_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
             audio_name = f"{name}_audio"
@@ -150,7 +156,6 @@ def download_advanced(info: dict, prefix: str) -> bool:
                     continue
             except:
                 continue
-            # merge and move
             merged = os.path.join(TEMP_DIR, f"{name}.mp4")
             try:
                 subprocess.run(["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged], check=True)
@@ -164,7 +169,6 @@ def download_video(info: dict) -> dict:
     vid, name, referer = info['video_id'], info['name'], info['referer']
     headers = {"User-Agent": "Mozilla/5.0", "Referer": referer}
     os.makedirs(TEMP_DIR, exist_ok=True)
-    # primary & secondary basic
     for prefix in [PRIMARY_PREFIX, SECONDARY_PREFIX]:
         url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
         try:
