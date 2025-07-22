@@ -4,7 +4,7 @@ av1.py
 
 Termux에서 AV1 HLS 스트림(DRM 포함)의 다운로드, 라이선스 교환, 복호화, 병합까지
 자동 수행하는 스크립트입니다.
-사용 전 b_cdn_drm_vod_dl.py 모듈이 같은 디렉터리에 위치해야 합니다.
+사용 전 `b_cdn_drm_vod_dl.py` 모듈이 같은 디렉터리에 위치해야 합니다.
 """
 import os
 import sys
@@ -20,39 +20,48 @@ if len(sys.argv) != 3:
     usage()
 
 VIDEO_ID   = sys.argv[1]
-RESOLUTION = sys.argv[2]       # ex: 1080p, 1440p, 2160p
-CODEC      = "av1"             # AV1 전용
+RESOLUTION = sys.argv[2]  # ex: 1080p, 1440p, 2160p
+CODEC      = "av1"       # AV1 전용
 
-# — 고정 Prefix & 도메인
-PREFIX = "vz-40d00b68-e91"
-DOMAIN = f"https://{PREFIX}.b-cdn.net"
+# 고정 Prefix & 도메인
+PREFIX     = "vz-40d00b68-e91"
+DOMAIN     = f"https://{PREFIX}.b-cdn.net"
 
-# — HLS manifest
-m3u8_url = f"{DOMAIN}/{VIDEO_ID}/{CODEC}_{RESOLUTION}/video.m3u8"
+# HLS manifest URL
+m3u8_url   = f"{DOMAIN}/{VIDEO_ID}/{CODEC}_{RESOLUTION}/video.m3u8"
 
-# 존재 확인
+# 브라우저에서 복사한 라이선스 서버 URL (Widevine)
+LICENSE_URL = (
+    "https://video.bunnycdn.com/WidevineLicense/459433/"
+    "a0d368af-f751-442e-9d6a-cb28f96fa765"
+    "?token=5ac2388f2651a3e45d4e9a2f38f9bc3629ca090b571c08b2914aed7c11e7ee70"
+    "&expires=1753214154"
+)
+
+# manifest 존재 확인
 try:
-    resp = requests.head(m3u8_url, timeout=5)
+    resp = requests.head(m3u8_url, headers={"Referer": DOMAIN}, timeout=5)
     if resp.status_code != 200:
         print(f"[ERROR] Manifest not found: {m3u8_url} (HTTP {resp.status_code})")
         sys.exit(1)
-except Exception as e:
+except requests.RequestException as e:
     print(f"[ERROR] 네트워크 에러: {e}")
     sys.exit(1)
 
-print(f"[*] Found manifest: {m3u8_url}")
+print(f"[*] Found HLS manifest: {m3u8_url}")
 
-# — 출력 세팅
+# 출력 파일명 및 경로
 output_name = f"{VIDEO_ID}_{CODEC}_{RESOLUTION}"
 output_path = os.getcwd()
 
-# — DRM 다운로드 + 복호화 + 병합
+# BunnyVideoDRM 인스턴스 생성 (라이선스 URL 포함)
 drm = BunnyVideoDRM(
     referer=DOMAIN,
     m3u8_url=m3u8_url,
+    license_url=LICENSE_URL,
     name=output_name,
     path=output_path
 )
-drm.download()
 
+drm.download()
 print(f"\n✅ 완료! 파일 위치: {output_path}/{output_name}.mp4")
