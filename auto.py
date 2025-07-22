@@ -67,8 +67,9 @@ def download_advanced(info: dict, prefix: str) -> bool:
     """
     vid, name, referer = info['video_id'], info['name'], info['referer']
     os.makedirs(TEMP_DIR, exist_ok=True)
-    if prefix == QUATERNARY_PREFIX:
-        # quaternary: use vp9_/av1_ paths only
+
+    # QUATERNARY and QUINARY prefixes: use vp9_/av1_ paths only
+    if prefix in (QUATERNARY_PREFIX, QUINARY_PREFIX):
         for codec in ("vp9", "av1"):
             for res in VIDEO_RESOLUTIONS:
                 video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/{codec}_{res}/video.m3u8"
@@ -102,7 +103,7 @@ def download_advanced(info: dict, prefix: str) -> bool:
                     except Exception:
                         continue
     else:
-        # tertiary/quinary: use default video paths
+        # TERTIARY prefix: default video paths
         for res in VIDEO_RESOLUTIONS:
             video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/video/{res}/video.m3u8"
             video_name = f"{name}_video"
