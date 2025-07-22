@@ -64,15 +64,17 @@ def move_to_android(src: str, name: str) -> None:
 def download_advanced(info: dict, prefix: str) -> bool:
     """
     Download best video+audio streams for advanced prefixes.
+    - QUINARY_PREFIX: vp9/av1 경로만 시도
+    - QUATERNARY_PREFIX: vp9/av1 경로 실패 시 video/{res}/video.m3u8 경로로도 재시도
+    - TERTIARY_PREFIX (else): video/{res}/video.m3u8 경로만 시도
     """
     vid, name, referer = info['video_id'], info['name'], info['referer']
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # QUATERNARY and QUINARY prefixes: use vp9_/av1_ paths only
-    if prefix in (QUATERNARY_PREFIX, QUINARY_PREFIX):
+    def _attempt_vp9_av1(pref):
         for codec in ("vp9", "av1"):
             for res in VIDEO_RESOLUTIONS:
-                video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/{codec}_{res}/video.m3u8"
+                video_m3u8 = f"https://{pref}.b-cdn.net/{vid}/{codec}_{res}/video.m3u8"
                 video_name = f"{name}_video"
                 try:
                     buf = io.StringIO()
@@ -83,8 +85,9 @@ def download_advanced(info: dict, prefix: str) -> bool:
                         continue
                 except Exception:
                     continue
+
                 for aq in AUDIO_QUALITIES:
-                    audio_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
+                    audio_m3u8 = f"https://{pref}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
                     audio_name = f"{name}_audio"
                     try:
                         buf = io.StringIO()
@@ -95,17 +98,22 @@ def download_advanced(info: dict, prefix: str) -> bool:
                             continue
                     except Exception:
                         continue
+
                     merged = os.path.join(TEMP_DIR, f"{name}.mp4")
                     try:
-                        subprocess.run(["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged], check=True)
+                        subprocess.run(
+                            ["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged],
+                            check=True
+                        )
                         move_to_android(merged, name)
                         return True
                     except Exception:
                         continue
-    else:
-        # TERTIARY prefix: default video paths
+        return False
+
+    def _attempt_default(pref):
         for res in VIDEO_RESOLUTIONS:
-            video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/video/{res}/video.m3u8"
+            video_m3u8 = f"https://{pref}.b-cdn.net/{vid}/video/{res}/video.m3u8"
             video_name = f"{name}_video"
             try:
                 buf = io.StringIO()
@@ -116,8 +124,9 @@ def download_advanced(info: dict, prefix: str) -> bool:
                     continue
             except Exception:
                 continue
+
             for aq in AUDIO_QUALITIES:
-                audio_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
+                audio_m3u8 = f"https://{pref}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
                 audio_name = f"{name}_audio"
                 try:
                     buf = io.StringIO()
@@ -128,20 +137,37 @@ def download_advanced(info: dict, prefix: str) -> bool:
                         continue
                 except Exception:
                     continue
+
                 merged = os.path.join(TEMP_DIR, f"{name}.mp4")
                 try:
-                    subprocess.run(["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged], check=True)
+                    subprocess.run(
+                        ["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged],
+                        check=True
+                    )
                     move_to_android(merged, name)
                     return True
                 except Exception:
                     continue
-    return False
+        return False
+
+    if prefix == QUINARY_PREFIX:
+        return _attempt_vp9_av1(prefix)
+
+    if prefix == QUATERNARY_PREFIX:
+        if _attempt_vp9_av1(prefix):
+            return True
+        return _attempt_default(prefix)
+
+    # TERTIARY or others
+    return _attempt_default(prefix)
 
 
 def download_video(info: dict) -> dict:
     vid, name, referer = info['video_id'], info['name'], info['referer']
     headers = {"User-Agent": "Mozilla/5.0", "Referer": referer}
     os.makedirs(TEMP_DIR, exist_ok=True)
+
+    # 1st & 2nd prefixes: playlist.m3u8 or direct mp4
     for prefix in [PRIMARY_PREFIX, SECONDARY_PREFIX]:
         url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
         try:
@@ -154,23 +180,28 @@ def download_video(info: dict) -> dict:
                 return {"name": referer, "success": True}
         except:
             pass
+
         for q in MP4_QUALITIES:
             try:
                 resp = requests.get(f"https://{prefix}.b-cdn.net/{vid}/{q}", headers=headers, stream=True, timeout=10)
                 resp.raise_for_status()
                 temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
                 with open(temp_file, 'wb') as f:
-                    for chunk in resp.iter_content(1024*1024): f.write(chunk)
+                    for chunk in resp.iter_content(1024*1024):
+                        f.write(chunk)
                 move_to_android(temp_file, name)
                 return {"name": referer, "success": True}
             except:
                 continue
+
+    # 3rd, 4th, 5th prefixes: advanced download
     if download_advanced(info, TERTIARY_PREFIX):
         return {"name": referer, "success": True}
     if download_advanced(info, QUATERNARY_PREFIX):
         return {"name": referer, "success": True}
     if download_advanced(info, QUINARY_PREFIX):
         return {"name": referer, "success": True}
+
     return {"name": referer, "success": False}
 
 
@@ -180,15 +211,18 @@ def main():
     if not urls:
         print("No URLs provided.")
         return
+
     results = []
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = [executor.submit(download_video, build_video_info(u)) for u in urls]
         for f in as_completed(futures):
             results.append(f.result())
+
     print("\n=== Results ===")
     for r in results:
         if r['success']:
             print(f"[OK] {r['name']}")
+
     fails = [r['name'] for r in results if not r['success']]
     if fails:
         print("\n=== Failed ===")
