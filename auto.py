@@ -67,40 +67,73 @@ def download_advanced(info: dict, prefix: str) -> bool:
     """
     vid, name, referer = info['video_id'], info['name'], info['referer']
     os.makedirs(TEMP_DIR, exist_ok=True)
-    # download video streams
-    for res in VIDEO_RESOLUTIONS:
-        video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/video/{res}/video.m3u8"
-        video_name = f"{name}_video"
-        try:
-            buf = io.StringIO()
-            with redirect_stdout(buf), redirect_stderr(buf):
-                BunnyVideoDRM(referer=referer, m3u8_url=video_m3u8, name=video_name, path=TEMP_DIR).download()
-            video_path = os.path.join(TEMP_DIR, f"{video_name}.mp4")
-            if not os.path.exists(video_path):
-                continue
-        except:
-            continue
-        # download audio streams
-        for aq in AUDIO_QUALITIES:
-            audio_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
-            audio_name = f"{name}_audio"
+    if prefix == QUATERNARY_PREFIX:
+        # quaternary: use vp9_/av1_ paths only
+        for codec in ("vp9", "av1"):
+            for res in VIDEO_RESOLUTIONS:
+                video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/{codec}_{res}/video.m3u8"
+                video_name = f"{name}_video"
+                try:
+                    buf = io.StringIO()
+                    with redirect_stdout(buf), redirect_stderr(buf):
+                        BunnyVideoDRM(referer=referer, m3u8_url=video_m3u8, name=video_name, path=TEMP_DIR).download()
+                    video_path = os.path.join(TEMP_DIR, f"{video_name}.mp4")
+                    if not os.path.exists(video_path):
+                        continue
+                except Exception:
+                    continue
+                for aq in AUDIO_QUALITIES:
+                    audio_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
+                    audio_name = f"{name}_audio"
+                    try:
+                        buf = io.StringIO()
+                        with redirect_stdout(buf), redirect_stderr(buf):
+                            BunnyVideoDRM(referer=referer, m3u8_url=audio_m3u8, name=audio_name, path=TEMP_DIR).download()
+                        audio_path = os.path.join(TEMP_DIR, f"{audio_name}.mp4")
+                        if not os.path.exists(audio_path):
+                            continue
+                    except Exception:
+                        continue
+                    merged = os.path.join(TEMP_DIR, f"{name}.mp4")
+                    try:
+                        subprocess.run(["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged], check=True)
+                        move_to_android(merged, name)
+                        return True
+                    except Exception:
+                        continue
+    else:
+        # tertiary/quinary: use default video paths
+        for res in VIDEO_RESOLUTIONS:
+            video_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/video/{res}/video.m3u8"
+            video_name = f"{name}_video"
             try:
                 buf = io.StringIO()
                 with redirect_stdout(buf), redirect_stderr(buf):
-                    BunnyVideoDRM(referer=referer, m3u8_url=audio_m3u8, name=audio_name, path=TEMP_DIR).download()
-                audio_path = os.path.join(TEMP_DIR, f"{audio_name}.mp4")
-                if not os.path.exists(audio_path):
+                    BunnyVideoDRM(referer=referer, m3u8_url=video_m3u8, name=video_name, path=TEMP_DIR).download()
+                video_path = os.path.join(TEMP_DIR, f"{video_name}.mp4")
+                if not os.path.exists(video_path):
                     continue
-            except:
+            except Exception:
                 continue
-            # merge and move
-            merged = os.path.join(TEMP_DIR, f"{name}.mp4")
-            try:
-                subprocess.run(["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged], check=True)
-                move_to_android(merged, name)
-                return True
-            except:
-                continue
+            for aq in AUDIO_QUALITIES:
+                audio_m3u8 = f"https://{prefix}.b-cdn.net/{vid}/audio/{aq}/audio.m3u8"
+                audio_name = f"{name}_audio"
+                try:
+                    buf = io.StringIO()
+                    with redirect_stdout(buf), redirect_stderr(buf):
+                        BunnyVideoDRM(referer=referer, m3u8_url=audio_m3u8, name=audio_name, path=TEMP_DIR).download()
+                    audio_path = os.path.join(TEMP_DIR, f"{audio_name}.mp4")
+                    if not os.path.exists(audio_path):
+                        continue
+                except Exception:
+                    continue
+                merged = os.path.join(TEMP_DIR, f"{name}.mp4")
+                try:
+                    subprocess.run(["ffmpeg", "-i", video_path, "-i", audio_path, "-c", "copy", "-y", merged], check=True)
+                    move_to_android(merged, name)
+                    return True
+                except Exception:
+                    continue
     return False
 
 
@@ -108,9 +141,7 @@ def download_video(info: dict) -> dict:
     vid, name, referer = info['video_id'], info['name'], info['referer']
     headers = {"User-Agent": "Mozilla/5.0", "Referer": referer}
     os.makedirs(TEMP_DIR, exist_ok=True)
-    # primary & secondary basic
     for prefix in [PRIMARY_PREFIX, SECONDARY_PREFIX]:
-        # standard m3u8
         url = f"https://{prefix}.b-cdn.net/{vid}/playlist.m3u8"
         try:
             buf = io.StringIO()
@@ -122,7 +153,6 @@ def download_video(info: dict) -> dict:
                 return {"name": referer, "success": True}
         except:
             pass
-        # MP4 fallback
         for q in MP4_QUALITIES:
             try:
                 resp = requests.get(f"https://{prefix}.b-cdn.net/{vid}/{q}", headers=headers, stream=True, timeout=10)
@@ -134,13 +164,10 @@ def download_video(info: dict) -> dict:
                 return {"name": referer, "success": True}
             except:
                 continue
-    # tertiary advanced
     if download_advanced(info, TERTIARY_PREFIX):
         return {"name": referer, "success": True}
-    # quaternary advanced
     if download_advanced(info, QUATERNARY_PREFIX):
         return {"name": referer, "success": True}
-    # quinary advanced
     if download_advanced(info, QUINARY_PREFIX):
         return {"name": referer, "success": True}
     return {"name": referer, "success": False}
@@ -166,6 +193,7 @@ def main():
         print("\n=== Failed ===")
         for e in fails:
             print(f"- {e}")
+
 
 if __name__ == "__main__":
     main()
