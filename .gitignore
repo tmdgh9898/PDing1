@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
 downloads/
-av1.py
+git rm --cached av1.py   # 이미 추적 중인 경우 추적 해제
+git add .gitignore
+git commit -m "ignore av1.py"
