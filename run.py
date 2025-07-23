@@ -72,10 +72,10 @@ def download_video(info: dict) -> dict:
                     for chunk in resp.iter_content(1024 * 1024):
                         f.write(chunk)
                 move_to_android(temp_file, name)
-                return True
+                return {"name": referer, "success": True, "source": prefix}
             except Exception:
                 continue
-        return False
+        return None
 
     # PRIMARY: playlist.m3u8 only
     try:
@@ -86,20 +86,21 @@ def download_video(info: dict) -> dict:
         temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
         if os.path.exists(temp_file):
             move_to_android(temp_file, name)
-            return {"name": referer, "success": True}
+            return {"name": referer, "success": True, "source": PRIMARY_PREFIX}
     except:
         pass
 
     # SECONDARY, QUATERNARY, QUINARY: MP4 only
     for prefix in [SECONDARY_PREFIX, QUATERNARY_PREFIX, QUINARY_PREFIX]:
-        if _attempt_mp4_download(prefix):
-            return {"name": referer, "success": True}
+        result = _attempt_mp4_download(prefix)
+        if result:
+            return result
 
     # TERTIARY: advanced stream
     if download_advanced(info, TERTIARY_PREFIX):
-        return {"name": referer, "success": True}
+        return {"name": referer, "success": True, "source": TERTIARY_PREFIX}
 
-    return {"name": referer, "success": False}
+    return {"name": referer, "success": False, "source": None}
 
 def download_advanced(info: dict, prefix: str) -> bool:
     vid, name, referer = info['video_id'], info['name'], info['referer']
@@ -159,7 +160,7 @@ def main():
     print("\n=== Results ===")
     for r in results:
         if r['success']:
-            print(f"[OK] {r['name']}")
+            print(f"[OK] {r['name']} (via {r['source']})")
 
     fails = [r['name'] for r in results if not r['success']]
     if fails:
