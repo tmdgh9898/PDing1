@@ -2,40 +2,27 @@ import requests
 import json
 
 def get_candfans_video_url(comment_show_url):
-    """
-    Extracts the user ID, post ID, and default path from the Candfans API 
-    and constructs the direct video URL.
-
-    Args:
-        comment_show_url (str): The URL in the format 
-                                "https://candfans.jp/posts/comment/show/{post_id}"
-
-    Returns:
-        str: The direct video URL or None if an error occurs.
-    """
     try:
-        # Extract the post_id from the comment_show_url
         post_id = comment_show_url.split('/')[-1]
         api_url = f"https://candfans.jp/api/contents/get-timeline/{post_id}"
 
-        response = requests.get(api_url)
-        response.raise_for_status()  # Raise an exception for HTTP errors
+        # 여기에 User-Agent 헤더 추가
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.88 Safari/537.36'
+        }
+
+        response = requests.get(api_url, headers=headers) # headers 인자 추가
+        response.raise_for_status()
 
         data = response.json()
 
-        # Extract user_id, post_id, and default_path
-        # The structure is data['data']['list'][0]['content'] for the first item
         content_data = data.get('data', {}).get('list', [])[0].get('content', {})
-        
-        # The path often contains /user/{user_id}/post/{post_id}/
-        # We need to find the user_id and post_id from this path
         content_path = content_data.get('path', '')
         path_parts = content_path.split('/')
-        
+
         user_id = None
         extracted_post_id = None
 
-        # Find user_id and post_id from the path_parts
         for i, part in enumerate(path_parts):
             if part == 'user' and i + 1 < len(path_parts):
                 user_id = path_parts[i+1]
@@ -67,7 +54,6 @@ def get_candfans_video_url(comment_show_url):
         print(f"An unexpected error occurred: {e}")
         return None
 
-# --- How to use it ---
 comment_url = "https://candfans.jp/posts/comment/show/951869"
 final_video_url = get_candfans_video_url(comment_url)
 
