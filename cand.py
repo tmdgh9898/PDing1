@@ -1,63 +1,43 @@
 import requests
 import json
 
-def get_candfans_video_url(comment_show_url):
+def generate_m3u8_link(comment_id):
+    api_url = f'https://candfans.jp/api/contents/get-timeline/{comment_id}'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:71.0) Gecko/20100101 Firefox/71.0'
+    }
+
+    # 1) JSON fetch
+    resp = requests.get(api_url, headers=headers)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # 2) pretty-print (console 확인용)
+    print(json.dumps(data, indent=4, ensure_ascii=False))
+
+    # 3) 필요한 필드 추출
+    post = data['data']['post']
+    user_id    = post['user_id']
+    post_id    = post['post_id']
+
+    # JSON 구조에 따라 달라질 수 있으니, 실제 필드명을 확인하고 수정하세요.
+    # 예: post.get('default_path') 또는 post['attachments'][0]['uuid'] 등
+    default_path = (
+        post.get('default_path') 
+        or (post.get('attachments') or [{}])[0].get('uuid')
+        or post.get('video_key')
+    )
+    if not default_path:
+        raise ValueError("default_path를 찾을 수 없습니다. JSON 구조를 확인하세요.")
+
+    # 4) 최종 m3u8 URL 생성
+    return f'https://video.candfans.jp/user/{user_id}/post/{post_id}/{default_path}.m3u8'
+
+
+if __name__ == '__main__':
+    cid = 968402
     try:
-        post_id = comment_show_url.split('/')[-1]
-        api_url = f"https://candfans.jp/api/contents/get-timeline/{post_id}"
-
-        # 여기에 User-Agent 헤더 추가
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.88 Safari/537.36'
-        }
-
-        response = requests.get(api_url, headers=headers) # headers 인자 추가
-        response.raise_for_status()
-
-        data = response.json()
-
-        content_data = data.get('data', {}).get('list', [])[0].get('content', {})
-        content_path = content_data.get('path', '')
-        path_parts = content_path.split('/')
-
-        user_id = None
-        extracted_post_id = None
-
-        for i, part in enumerate(path_parts):
-            if part == 'user' and i + 1 < len(path_parts):
-                user_id = path_parts[i+1]
-            elif part == 'post' and i + 1 < len(path_parts):
-                extracted_post_id = path_parts[i+1]
-
-        default_path = content_data.get('default_path', '')
-
-        if user_id and extracted_post_id and default_path:
-            video_url = (
-                f"https://video.candfans.jp/user/{user_id}/post/"
-                f"{extracted_post_id}/{default_path}"
-            )
-            return video_url
-        else:
-            print("Could not extract all necessary components for the video URL.")
-            return None
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching data from API: {e}")
-        return None
-    except json.JSONDecodeError:
-        print("Error decoding JSON from API response.")
-        return None
-    except IndexError:
-        print("Could not find the expected data structure in the API response.")
-        return None
+        link = generate_m3u8_link(cid)
+        print("\nGenerated m3u8 link:\n", link)
     except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-        return None
-
-comment_url = "https://candfans.jp/posts/comment/show/951869"
-final_video_url = get_candfans_video_url(comment_url)
-
-if final_video_url:
-    print(f"Generated video URL: {final_video_url}")
-else:
-    print("Failed to generate the video URL.")
+        print("Error:", e)
