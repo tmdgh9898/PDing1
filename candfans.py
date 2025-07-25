@@ -1,17 +1,10 @@
-cat << 'EOF' > ~/candfans.py
 #!/data/data/com.termux/files/usr/bin/env python3
 import sys, json
 import cloudscraper
 
 def fetch_timeline(cid):
-    # cloudscraper 로 Cloudflare 봇 차단 우회
     scraper = cloudscraper.create_scraper(
-        browser={
-            'browser':'chrome',
-            'platform':'android',
-            'platformVersion':'11',
-            'mobile':True
-        }
+        browser={'browser':'chrome','platform':'android','mobile':True}
     )
     url = f'https://candfans.jp/api/contents/get-timeline/{cid}'
     headers = {
@@ -30,7 +23,7 @@ def make_m3u8_link(data):
         or p.get('video_key')
     )
     if not (uid and pid and key):
-        raise ValueError("JSON 구조가 바뀌었거나, 필요한 필드가 없습니다.")
+        raise ValueError("필드 누락: JSON 구조를 확인하세요.")
     return f'https://video.candfans.jp/user/{uid}/post/{pid}/{key}.m3u8'
 
 def main():
@@ -44,10 +37,7 @@ def main():
         print(f"[ERROR] API 호출 실패: {e}")
         sys.exit(1)
 
-    # JSON 예쁘게 출력
     print(json.dumps(data, indent=4, ensure_ascii=False))
-
-    # m3u8 링크 생성 및 출력
     try:
         link = make_m3u8_link(data)
         print(f"\n▶ Generated m3u8 link:\n{link}")
@@ -57,4 +47,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-EOF
