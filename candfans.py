@@ -1,16 +1,3 @@
-# 1) Termux 패키지 업데이트/업그레이드
-pkg update && pkg upgrade -y
-
-# 2) Python 및 cloudscraper 설치
-pkg install -y python
-pip install --upgrade pip
-pip install cloudscraper
-
-# 3) PDing1 디렉토리로 이동 (스크립트 저장 위치)
-cd ~/PDing1
-
-# 4) Python 스크립트 파일 생성 (오직 파이썬 코드만)
-cat > candfans.py << 'EOF'
 #!/data/data/com.termux/files/usr/bin/env python3
 import sys, json
 import cloudscraper
@@ -21,9 +8,9 @@ def fetch_timeline(cid):
     )
     url = f'https://candfans.jp/api/contents/get-timeline/{cid}'
     headers = {
-        'Referer':           f'https://candfans.jp/posts/comment/show/{cid}',
-        'User-Agent':        'Mozilla/5.0 (Linux; Android 11; Mobile) Chrome/112.0.0.0 Safari/537.36',
-        'X-Requested-With':  'XMLHttpRequest',
+        'Referer':          f'https://candfans.jp/posts/comment/show/{cid}',
+        'User-Agent':       'Mozilla/5.0 (Linux; Android 11; Mobile) Chrome/112.0.0.0 Safari/537.36',
+        'X-Requested-With':'XMLHttpRequest',
         'Cookie': (
             "candfans_lang=ko; app_id=zYaBw5kiLF1zrGP0yUV3xzhb6DOq6rb6VorHDSYqZDdtv8qZc5; "
             "AWSALB=ZXxeXlLkZ9POo6lRvmdohn5Qb27GNt2W3UhVOZZDLgB0TotWQji9nMDiT2A854qWtSa8Jtw8mI8d79nAWB/m/SDUjXvmf3cdxXuoJ/"
@@ -72,9 +59,3 @@ def main():
 if __name__ == '__main__':
     main()
 EOF
-
-# 5) 실행 권한 부여
-chmod +x ~/PDing1/candfans.py
-
-# 6) 스크립트 실행
-~/PDing1/candfans.py 968402
