@@ -1,11 +1,16 @@
-# 1) 필요한 패키지 설치
+# 1) Termux 패키지 업데이트/업그레이드
 pkg update && pkg upgrade -y
+
+# 2) Python 및 cloudscraper 설치
 pkg install -y python
 pip install --upgrade pip
 pip install cloudscraper
 
-# 2) 스크립트 생성
-cat > ~/candfans.py << 'EOF'
+# 3) PDing1 디렉토리로 이동 (스크립트 저장 위치)
+cd ~/PDing1
+
+# 4) Python 스크립트 파일 생성 (오직 파이썬 코드만)
+cat > candfans.py << 'EOF'
 #!/data/data/com.termux/files/usr/bin/env python3
 import sys, json
 import cloudscraper
@@ -68,8 +73,8 @@ if __name__ == '__main__':
     main()
 EOF
 
-# 3) 실행 권한
-chmod +x ~/candfans.py
+# 5) 실행 권한 부여
+chmod +x ~/PDing1/candfans.py
 
-# 4) 사용 예
-~/candfans.py 968402
+# 6) 스크립트 실행
+~/PDing1/candfans.py 968402
