@@ -19,50 +19,36 @@ def fetch_timeline(comment_id: str) -> dict:
     resp.raise_for_status()
     return resp.json()
 
-def extract_m3u8_link_and_title(data: dict) -> tuple:
+def extract_title_and_link(data: dict) -> tuple:
     """
     JSON에서 title과 m3u8 링크를 추출하여 반환
     """
     post = data.get("data", {}).get("post", {})
-    title = post.get("title")
-
-    # 1) JSON blob 내부 전체 URL 검색
+    title = post.get("title") or ""
     blob = json.dumps(data)
     match = re.search(r'https://video\.candfans\.jp/user/\d+/post/\d+/[0-9a-fA-F\-]+\.m3u8', blob)
     if match:
         return title, match.group(0)
-
     user_id = post.get("user_id")
     post_id = post.get("post_id")
     if not (user_id and post_id):
         raise ValueError("user_id 또는 post_id가 없습니다.")
-
-    # 2) post_attachments
+    # post_attachments
     for att in post.get("post_attachments", []):
         dp = att.get("default_path")
         if dp:
-            link = f"https://video.candfans.jp/user/{user_id}/post/{post_id}/{dp}"
-            return title, link
-
-    # 3) sample_file
+            return title, f"https://video.candfans.jp/user/{user_id}/post/{post_id}/{dp}"
     sample = post.get("sample_file")
     if sample:
         return title, f"https://video.candfans.jp{sample}"
-
-    # 4) attachments
     for att in post.get("attachments", []):
         uuid = att.get("uuid")
         if uuid:
-            link = f"https://video.candfans.jp/user/{user_id}/post/{post_id}/{uuid}.m3u8"
-            return title, link
-
-    # 5) default_path / video_key
+            return title, f"https://video.candfans.jp/user/{user_id}/post/{post_id}/{uuid}.m3u8"
     for key in ("default_path", "video_key"):
         val = post.get(key)
         if val:
-            link = f"https://video.candfans.jp/user/{user_id}/post/{post_id}/{val}.m3u8"
-            return title, link
-
+            return title, f"https://video.candfans.jp/user/{user_id}/post/{post_id}/{val}.m3u8"
     raise ValueError("m3u8 생성용 키를 찾을 수 없습니다.")
 
 def parse_comment_id(arg: str) -> str:
@@ -78,54 +64,40 @@ def parse_comment_id(arg: str) -> str:
     raise ValueError(f"유효한 comment_id를 찾을 수 없습니다: {arg}")
 
 def main():
-    try:
-        raw = input("Enter comment IDs or URLs (separated by space): ")
-    except EOFError:
-        return
-    args = raw.strip().split()
-    if not args:
+    # URL 또는 ID 입력
+    url_input = input("Enter comment URL or ID: ").strip()
+    if not url_input:
         print("No input provided.")
-        return
-
-    last_title = None
-    last_link = None
-
-    for arg in args:
-        try:
-            cid = parse_comment_id(arg)
-        except Exception as e:
-            print(f"[ERROR] ID 파싱 실패 '{arg}': {e}")
-            continue
-
-        try:
-            data = fetch_timeline(cid)
-        except Exception as e:
-            print(f"[{cid}] API 호출 실패: {e}")
-            continue
-
-        try:
-            title, link = extract_m3u8_link_and_title(data)
-            print(f"Title: {title}\nLink: {link}\n")
-            last_title = title
-            last_link = link
-        except Exception as e:
-            print(f"[{cid}] 링크 생성 실패: {e}")
-
-    if last_link:
-        print("Which to copy? (l)ink, (t)itle, (b)oth, (n)one")
-        choice = input("Your choice: ").strip().lower()
-        if choice == 'l':
-            subprocess.run(["termux-clipboard-set", last_link], check=True)
-            print(f"Link copied to clipboard: {last_link}")
-        elif choice == 't':
-            subprocess.run(["termux-clipboard-set", last_title], check=True)
-            print(f"Title copied to clipboard: {last_title}")
-        elif choice == 'b':
-            both = f"{last_title}\n{last_link}"
-            subprocess.run(["termux-clipboard-set", both], check=True)
-            print(f"Title and link copied to clipboard:\n{both}")
-        else:
-            print("No copy action taken.")
+        sys.exit(1)
+    try:
+        cid = parse_comment_id(url_input)
+    except Exception as e:
+        print(f"[ERROR] ID 파싱 실패: {e}")
+        sys.exit(1)
+    try:
+        data = fetch_timeline(cid)
+    except Exception as e:
+        print(f"[ERROR] API 호출 실패: {e}")
+        sys.exit(1)
+    try:
+        title, link = extract_title_and_link(data)
+    except Exception as e:
+        print(f"[ERROR] 링크 생성 실패: {e}")
+        sys.exit(1)
+    # 링크 복사
+    print(f"Link: {link}")
+    try:
+        subprocess.run(["termux-clipboard-set", link], check=True)
+        print("Link copied to clipboard.")
+    except Exception as e:
+        print(f"Failed to copy link: {e}")
+    # 제목 복사
+    print(f"Title: {title}")
+    try:
+        subprocess.run(["termux-clipboard-set", title], check=True)
+        print("Title copied to clipboard.")
+    except Exception as e:
+        print(f"Failed to copy title: {e}")
 
 if __name__ == "__main__":
     main()
