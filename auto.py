@@ -4,6 +4,7 @@ import requests
 import io
 import shutil
 import subprocess
+import html as html_module
 from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from b_cdn_drm_vod_dl import BunnyVideoDRM
@@ -36,23 +37,24 @@ def fetch_title(url: str) -> str:
             "Referer": url
         }
         resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code != 200 or not resp.text.strip():
-            print(f"[WARN] Failed to fetch HTML title for {url}, using fallback name.")
-            return "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
-        
-        m = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
+        resp.raise_for_status()
+        html = resp.text
+
+        m = re.search(r"<title.*?>([\s\S]*?)</title>", html, re.IGNORECASE)
         if not m:
+            print(f"[WARN] Title tag not found in HTML, using fallback.")
             return "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
 
         title = m.group(1).strip()
         if '|' in title:
-            title = title.split('|', 1)[1].strip()
-        elif '_' in title:
-            parts = re.split(r'_\s*', title, 1)
-            title = parts[1].strip() if len(parts) > 1 else title
-        return title
-    except Exception:
-        print(f"[WARN] Error while fetching title for {url}, using fallback name.")
+            title = title.split('|')[-1].strip()
+        else:
+            title = title.strip()
+
+        title = html_module.unescape(title)
+        return title if title else "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
+    except Exception as e:
+        print(f"[WARN] Error while fetching title: {e}, using fallback.")
         return "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
 
 def build_video_info(url: str) -> dict:
