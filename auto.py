@@ -6,9 +6,6 @@ import shutil
 import subprocess
 from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from bs4 import BeautifulSoup
 from b_cdn_drm_vod_dl import BunnyVideoDRM
 
 # CDN prefixes
@@ -20,7 +17,6 @@ QUINARY_PREFIX = "vz-6b30db03-fbb"
 
 # Fallback MP4 qualities
 MP4_QUALITIES = ["play_720p.mp4", "play_480p.mp4", "play_360p.mp4", "play_240p.mp4"]
-
 # Advanced video/audio lists
 VIDEO_RESOLUTIONS = ["2160p", "1440p", "1080p", "720p", "480p", "360p"]
 AUDIO_QUALITIES = ["256a", "192a", "128a", "96a"]
@@ -34,38 +30,39 @@ def sanitize_filename(name: str) -> str:
     return re.sub(INVALID_CHARS, '_', name)
 
 def fetch_title(url: str) -> str:
-    """Get page title with retries and BeautifulSoup parsing."""
-    session = requests.Session()
-    retries = Retry(total=5, backoff_factor=1, status_forcelist=[500,502,503,504])
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                      "(KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-        "Referer": url
-    }
-
-    try:
-        resp = session.get(url, headers=headers, timeout=10, verify=False)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        if soup.title and soup.title.string:
-            title = soup.title.string.strip()
-            # 제목 후처리 (| 또는 _ 기준으로 잘라내기)
-            if '|' in title:
-                title = title.split('|')[-1].strip()
-            elif '_' in title:
-                parts = re.split(r'_\s*', title, 1)
-                title = parts[1].strip() if len(parts) > 1 else title
-            return title
-
+    """
+    API를 이용해 title 가져오기
+    """
+    # URL에서 UUID 추출
+    m = re.search(r"v=([a-f0-9\-]+)", url)
+    if not m:
+        print("[WARN] URL에서 video_id 추출 실패 → fallback 이름 사용")
         return "video_fallback"
 
+    uuid = m.group(1)
+    api_url = f"https://backend.prod.pd-ing.com/api/cdn/video/{uuid}"
+
+    try:
+        resp = requests.get(api_url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        title = data.get("title") or data.get("name")  # API에 따라 key 다를 수 있음
+        if not title:
+            return "video_fallback"
+
+        # 후처리
+        title = title.strip()
+        if '|' in title:
+            title = title.split('|', 1)[1].strip()
+        elif '_' in title:
+            parts = re.split(r'_\s*', title, 1)
+            title = parts[1].strip() if len(parts) > 1 else title
+
+        return title
+
     except Exception as e:
-        print(f"[WARN] Error while fetching title: {e}, using fallback.")
+        print(f"[WARN] API에서 제목 가져오기 실패: {e}")
         return "video_fallback"
 
 def build_video_info(url: str) -> dict:
