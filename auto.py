@@ -1,5 +1,6 @@
 import os
 import re
+import requests
 import io
 import shutil
 import subprocess
@@ -28,40 +29,31 @@ INVALID_CHARS = r'[<>:"/\\|?*]'
 def sanitize_filename(name: str) -> str:
     return re.sub(INVALID_CHARS, '_', name)
 
-def curl_get(url: str, headers: dict = None, output_file: str = None, stream: bool = False) -> bool:
-    """
-    Curl wrapper: downloads content to memory or file.
-    Returns True if successful, False otherwise.
-    """
-    cmd = ["curl", "-k", "-L", "-s", "--fail"]
-    if headers:
-        for k, v in headers.items():
-            cmd += ["-H", f"{k}: {v}"]
-    cmd.append(url)
-
-    if output_file:
-        cmd += ["-o", output_file]
-        return subprocess.call(cmd) == 0
-    else:
-        try:
-            return subprocess.check_output(cmd, text=True)
-        except subprocess.CalledProcessError:
-            return None
-
 def fetch_title(url: str) -> str:
-    html = curl_get(url, headers={"User-Agent": "Mozilla/5.0"})
-    if not html:
-        raise ValueError("Failed to fetch page")
-    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
-    if not m:
-        raise ValueError("Page title not found")
-    title = m.group(1).strip()
-    if '|' in title:
-        title = title.split('|', 1)[1].strip()
-    elif '_' in title:
-        parts = re.split(r'_\s*', title, 1)
-        title = parts[1].strip() if len(parts) > 1 else title
-    return title
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": url
+        }
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200 or not resp.text.strip():
+            print(f"[WARN] Failed to fetch HTML title for {url}, using fallback name.")
+            return "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
+        
+        m = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
+        if not m:
+            return "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
+
+        title = m.group(1).strip()
+        if '|' in title:
+            title = title.split('|', 1)[1].strip()
+        elif '_' in title:
+            parts = re.split(r'_\s*', title, 1)
+            title = parts[1].strip() if len(parts) > 1 else title
+        return title
+    except Exception:
+        print(f"[WARN] Error while fetching title for {url}, using fallback name.")
+        return "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
 
 def build_video_info(url: str) -> dict:
     m = re.search(r"v=([a-f0-9\-]+)", url)
@@ -83,11 +75,18 @@ def download_video(info: dict) -> dict:
 
     def _attempt_mp4_download(prefix):
         for q in MP4_QUALITIES:
-            url = f"https://{prefix}.b-cdn.net/{vid}/{q}"
-            temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
-            if curl_get(url, headers=headers, output_file=temp_file):
+            try:
+                url = f"https://{prefix}.b-cdn.net/{vid}/{q}"
+                resp = requests.get(url, headers=headers, stream=True, timeout=10)
+                resp.raise_for_status()
+                temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
+                with open(temp_file, 'wb') as f:
+                    for chunk in resp.iter_content(1024 * 1024):
+                        f.write(chunk)
                 move_to_android(temp_file, name)
                 return {"name": referer, "success": True, "source": prefix}
+            except Exception:
+                continue
         return None
 
     # PRIMARY: playlist.m3u8 only
