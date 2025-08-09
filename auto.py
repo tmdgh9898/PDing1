@@ -1,10 +1,8 @@
 import os
 import re
-import requests
 import io
 import shutil
 import subprocess
-import time
 from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from b_cdn_drm_vod_dl import BunnyVideoDRM
@@ -27,56 +25,43 @@ TEMP_DIR = os.path.join(os.getcwd(), "downloads")
 ANDROID_DOWNLOAD_DIR = "/storage/emulated/0/Download"
 INVALID_CHARS = r'[<>:"/\\|?*]'
 
-
 def sanitize_filename(name: str) -> str:
     return re.sub(INVALID_CHARS, '_', name)
 
+def curl_get(url: str, headers: dict = None, output_file: str = None, stream: bool = False) -> bool:
+    """
+    Curl wrapper: downloads content to memory or file.
+    Returns True if successful, False otherwise.
+    """
+    cmd = ["curl", "-k", "-L", "-s", "--fail"]
+    if headers:
+        for k, v in headers.items():
+            cmd += ["-H", f"{k}: {v}"]
+    cmd.append(url)
+
+    if output_file:
+        cmd += ["-o", output_file]
+        return subprocess.call(cmd) == 0
+    else:
+        try:
+            return subprocess.check_output(cmd, text=True)
+        except subprocess.CalledProcessError:
+            return None
 
 def fetch_title(url: str) -> str:
-    from requests.adapters import HTTPAdapter
-    from urllib3.poolmanager import PoolManager
-    import ssl
-
-    class TLSAdapter(HTTPAdapter):
-        def init_poolmanager(self, *args, **kwargs):
-            ctx = ssl.create_default_context()
-            ctx.set_ciphers('DEFAULT@SECLEVEL=1')
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            kwargs['ssl_context'] = ctx
-            return super(TLSAdapter, self).init_poolmanager(*args, **kwargs)
-
-    session = requests.Session()
-    session.mount("https://", TLSAdapter())
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/115.0 Safari/537.36",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer": "https://www.pd-ing.com/"
-    }
-
-    for attempt in range(3):
-        try:
-            resp = session.get(url, headers=headers, timeout=10, verify=False)
-            resp.raise_for_status()
-            m = re.search(r"<title[^>]*>(.*?)</title>", resp.text, re.IGNORECASE | re.DOTALL)
-            if not m:
-                raise ValueError("Page title not found")
-            title = m.group(1).strip()
-            if '|' in title:
-                title = title.split('|', 1)[1].strip()
-            elif '_' in title:
-                parts = re.split(r'_\s*', title, 1)
-                title = parts[1].strip() if len(parts) > 1 else title
-            return title
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2)
-            else:
-                raise e
-
+    html = curl_get(url, headers={"User-Agent": "Mozilla/5.0"})
+    if not html:
+        raise ValueError("Failed to fetch page")
+    m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    if not m:
+        raise ValueError("Page title not found")
+    title = m.group(1).strip()
+    if '|' in title:
+        title = title.split('|', 1)[1].strip()
+    elif '_' in title:
+        parts = re.split(r'_\s*', title, 1)
+        title = parts[1].strip() if len(parts) > 1 else title
+    return title
 
 def build_video_info(url: str) -> dict:
     m = re.search(r"v=([a-f0-9\-]+)", url)
@@ -86,12 +71,10 @@ def build_video_info(url: str) -> dict:
     name = sanitize_filename(fetch_title(url))
     return {"referer": url, "video_id": vid, "name": name}
 
-
 def move_to_android(src: str, name: str) -> None:
     os.makedirs(ANDROID_DOWNLOAD_DIR, exist_ok=True)
     dst = os.path.join(ANDROID_DOWNLOAD_DIR, f"{name}.mp4")
     shutil.move(src, dst)
-
 
 def download_video(info: dict) -> dict:
     vid, name, referer = info['video_id'], info['name'], info['referer']
@@ -100,18 +83,11 @@ def download_video(info: dict) -> dict:
 
     def _attempt_mp4_download(prefix):
         for q in MP4_QUALITIES:
-            try:
-                url = f"https://{prefix}.b-cdn.net/{vid}/{q}"
-                resp = requests.get(url, headers=headers, stream=True, timeout=10)
-                resp.raise_for_status()
-                temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
-                with open(temp_file, 'wb') as f:
-                    for chunk in resp.iter_content(1024 * 1024):
-                        f.write(chunk)
+            url = f"https://{prefix}.b-cdn.net/{vid}/{q}"
+            temp_file = os.path.join(TEMP_DIR, f"{name}.mp4")
+            if curl_get(url, headers=headers, output_file=temp_file):
                 move_to_android(temp_file, name)
                 return {"name": referer, "success": True, "source": prefix}
-            except Exception:
-                continue
         return None
 
     # PRIMARY: playlist.m3u8 only
@@ -138,7 +114,6 @@ def download_video(info: dict) -> dict:
         return {"name": referer, "success": True, "source": TERTIARY_PREFIX}
 
     return {"name": referer, "success": False, "source": None}
-
 
 def download_advanced(info: dict, prefix: str) -> bool:
     vid, name, referer = info['video_id'], info['name'], info['referer']
@@ -182,7 +157,6 @@ def download_advanced(info: dict, prefix: str) -> bool:
                 continue
     return False
 
-
 def main():
     raw = input("Enter URLs (space/comma-separated):\n").strip()
     urls = [u for u in re.split(r"[\s,;]+", raw) if u]
@@ -206,7 +180,6 @@ def main():
         print("\n=== Failed ===")
         for e in fails:
             print(f"- {e}")
-
 
 if __name__ == "__main__":
     main()
