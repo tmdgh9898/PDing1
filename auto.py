@@ -29,38 +29,37 @@ INVALID_CHARS = r'[<>:"/\\|?*]'
 def sanitize_filename(name: str) -> str:
     return re.sub(INVALID_CHARS, '_', name)
 
-def fetch_title(url: str) -> str:
-    """
-    API를 이용해 title 가져오기
-    """
-    # URL에서 UUID 추출
+def get_video_uuid(url: str) -> str:
+    """URL에서 v= 뒤 UUID 추출"""
     m = re.search(r"v=([a-f0-9\-]+)", url)
     if not m:
         print("[WARN] URL에서 video_id 추출 실패 → fallback 이름 사용")
+        return None
+    return m.group(1)
+
+def fetch_title(url: str) -> str:
+    """
+    API에서 title만 받아오기. (UUID 추출도 포함)
+    """
+    uuid = get_video_uuid(url)
+    if not uuid:
         return "video_fallback"
-
-    uuid = m.group(1)
     api_url = f"https://backend.prod.pd-ing.com/api/cdn/video/{uuid}"
-
     try:
         resp = requests.get(api_url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-
-        title = data.get("title") or data.get("name")  # API에 따라 key 다를 수 있음
+        title = data.get("title") or data.get("name")
         if not title:
             return "video_fallback"
-
-        # 후처리
         title = title.strip()
+        # 후처리: 구분자 있으면 뒤쪽만
         if '|' in title:
             title = title.split('|', 1)[1].strip()
         elif '_' in title:
             parts = re.split(r'_\s*', title, 1)
             title = parts[1].strip() if len(parts) > 1 else title
-
         return title
-
     except Exception as e:
         print(f"[WARN] API에서 제목 가져오기 실패: {e}")
         return "video_fallback"
