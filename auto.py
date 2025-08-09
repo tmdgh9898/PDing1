@@ -4,9 +4,10 @@ import requests
 import io
 import shutil
 import subprocess
-import html as html_module
 from contextlib import redirect_stdout, redirect_stderr
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from b_cdn_drm_vod_dl import BunnyVideoDRM
 
 # CDN prefixes
@@ -31,31 +32,33 @@ def sanitize_filename(name: str) -> str:
     return re.sub(INVALID_CHARS, '_', name)
 
 def fetch_title(url: str) -> str:
+    session = requests.Session()
+    retries = Retry(total=5, backoff_factor=1, status_forcelist=[500,502,503,504])
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("https://", adapter)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        "Referer": url
+    }
+
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Referer": url
-        }
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = session.get(url, headers=headers, timeout=10, verify=False)  # SSL 검증 끔
         resp.raise_for_status()
-        html = resp.text
-
-        m = re.search(r"<title.*?>([\s\S]*?)</title>", html, re.IGNORECASE)
+        m = re.search(r"<title.*?>([\s\S]*?)</title>", resp.text, re.IGNORECASE)
         if not m:
-            print(f"[WARN] Title tag not found in HTML, using fallback.")
-            return "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
-
+            return "video_fallback"
         title = m.group(1).strip()
         if '|' in title:
             title = title.split('|')[-1].strip()
-        else:
-            title = title.strip()
-
-        title = html_module.unescape(title)
-        return title if title else "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
+        elif '_' in title:
+            parts = re.split(r'_\s*', title, 1)
+            title = parts[1].strip() if len(parts) > 1 else title
+        return title
     except Exception as e:
         print(f"[WARN] Error while fetching title: {e}, using fallback.")
-        return "video_" + re.sub(r'[^a-zA-Z0-9]+', '_', url)
+        return "video_fallback"
 
 def build_video_info(url: str) -> dict:
     m = re.search(r"v=([a-f0-9\-]+)", url)
